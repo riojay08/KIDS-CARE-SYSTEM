@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KidsCare · School QR & Messaging</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+:root{color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:#05060f;color:#e6f1ff;font-family:system-ui,'Segoe UI',sans-serif;
+ background-image:radial-gradient(circle at 15% 10%,rgba(34,211,238,.18),transparent 40%),radial-gradient(circle at 85% 90%,rgba(168,85,247,.2),transparent 45%);background-attachment:fixed}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:#05060f;z-index:60}
+/* glass card with neon border */
+.glass{background:rgba(255,255,255,.05);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid rgba(34,211,238,.35);border-radius:1rem;box-shadow:0 0 18px rgba(34,211,238,.15),inset 0 0 14px rgba(168,85,247,.08);transition:.3s}
+.glass:hover{border-color:rgba(168,85,247,.6);box-shadow:0 0 24px rgba(168,85,247,.25)}
+.neon{color:#67e8f9;text-shadow:0 0 12px rgba(34,211,238,.7)}
+.btn{background:linear-gradient(90deg,#06b6d4,#7c3aed);color:#fff;font-weight:600;border-radius:.75rem;padding:.7rem 1.1rem;transition:.2s;box-shadow:0 0 14px rgba(34,211,238,.4)}
+.btn:hover{transform:translateY(-2px);box-shadow:0 0 24px rgba(168,85,247,.6)}
+.btn2{border:1px solid rgba(34,211,238,.5);border-radius:.75rem;padding:.55rem .9rem;color:#67e8f9;transition:.2s}
+.btn2:hover{background:rgba(34,211,238,.12)}
+.gbtn{width:100%;display:flex;gap:.6rem;justify-content:center;align-items:center;border:1px solid rgba(255,255,255,.25);border-radius:.75rem;padding:.65rem;background:rgba(255,255,255,.06);transition:.2s}
+.gbtn:hover{background:rgba(255,255,255,.14)}
+.tabb{padding:.55rem .9rem;border-radius:.75rem;white-space:nowrap;color:#94a3b8;transition:.2s}
+.tabb.on{background:rgba(34,211,238,.15);color:#67e8f9;box-shadow:0 0 12px rgba(34,211,238,.4) inset}
+/* floating-label fields */
+.fl{position:relative;margin-bottom:.9rem}
+.fl input,.fl select,.fl textarea{width:100%;padding:1.25rem .8rem .45rem;background:rgba(255,255,255,.05);border:1px solid rgba(148,163,184,.3);border-radius:.75rem;color:#fff;outline:0;transition:.2s}
+.fl select option{background:#0b1020}
+.fl label{position:absolute;left:.8rem;top:.95rem;font-size:.85rem;color:#94a3b8;transition:.2s;pointer-events:none}
+.fl input:focus+label,.fl input:not(:placeholder-shown)+label,.fl textarea:focus+label,.fl textarea:not(:placeholder-shown)+label,.fl input[type=date]+label,.fl select+label{top:.3rem;font-size:.65rem;color:#22d3ee}
+.fl input:focus,.fl select:focus,.fl textarea:focus{border-color:#22d3ee;box-shadow:0 0 12px rgba(34,211,238,.45)}
+.fl.bad input{border-color:#f43f5e}.fl.ok input{border-color:#34d399}
+.err{color:#fb7185;font-size:.7rem;min-height:0;margin:.15rem 0 0 .3rem}
+.chip{display:inline-block;padding:.2rem .6rem;border-radius:99px;font-size:.75rem;border:1px solid rgba(168,85,247,.6);background:rgba(168,85,247,.15);margin:.15rem}
+.chip.on{background:rgba(34,211,238,.25);border-color:#22d3ee}
+.bub{max-width:80%;padding:.45rem .8rem;border-radius:1rem;font-size:.85rem;animation:pop .25s}
+.bub.me{margin-left:auto;background:linear-gradient(90deg,#0891b2,#6d28d9);border-bottom-right-radius:.2rem}
+.bub.them{background:rgba(255,255,255,.1);border-bottom-left-radius:.2rem}
+.fade{animation:fade .45s ease both}.float{animation:float 3s ease-in-out infinite}.shake{animation:shake .4s}
+@keyframes fade{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
+@keyframes float{50%{transform:translateY(-6px)}}
+@keyframes shake{25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+#toasts{position:fixed;right:.75rem;top:calc(.75rem + env(safe-area-inset-top,0px));z-index:80;display:flex;flex-direction:column;gap:.5rem;max-width:calc(100% - 1.5rem);width:22rem}
+#printArea{display:none}
+@media print{body>*:not(#printArea){display:none!important}#printArea{display:block;text-align:center;color:#000}body{background:#fff}}
+</style>
+</head>
+<body>
+<div id="app"></div><div id="toasts"></div><div id="modal"></div><div id="printArea"></div>
+<script>
+/* ===== API + local cache (data now comes from the Node server) ===== */
+const api={token:localStorage.getItem('kc_token'),
+ setToken(t){this.token=t;t?localStorage.setItem('kc_token',t):localStorage.removeItem('kc_token')},
+ async req(p,o={}){const f=o.body instanceof FormData,h={};if(!f)h['Content-Type']='application/json';if(this.token)h.Authorization='Bearer '+this.token;
+  const r=await fetch('/api'+p,{method:o.method||'GET',headers:h,body:o.body&&!f?JSON.stringify(o.body):o.body});
+  const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'May error, subukan ulit');return d}};
+let db={users:[],children:[],photos:[],feed:[],scans:[],msgs:[],mail:[]},cur=null,socket=null,loadedCid=null,pendingBlob=null;
+const ts=s=>new Date(String(s).replace(' ','T')+'Z').getTime();
+const userFromToken=t=>{try{const p=JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));return{id:p.id,role:p.role,name:p.name}}catch(e){return null}};
+const mapMsg=m=>({id:m.id,parentId:String(m.parent_id),from:m.sender_role,name:m.sender_name,text:m.text,t:ts(m.created_at)});
+const qrOf=id=>qrPng('KIDSCARE:'+db.children.find(c=>c.id==id).token);
+// Kinukuha ang bata/photos sa server at inaayos sa hugis na gamit ng mga view
+async function refresh(){
+ const ch=await api.req('/children');
+ db.children=ch.map(c=>({id:String(c.id),parentId:String(c.parent_id),name:c.name,address:c.address,age:c.age,dob:c.dob,phone:c.phone,allergies:c.allergies,status:c.status,token:c.qr_token,code:c.student_code,classroom:c.classroom||'',medical:c.medical_notes,emName:c.emergency_name,emPhone:c.emergency_phone,pname:c.parent_name,pemail:c.parent_email}));
+ if(cur.role==='admin'){db.users=(await api.req('/parents')).map(p=>({id:String(p.id),role:'parent',name:p.name,email:p.email}));await loadScans()}
+ else db.feed=(await api.req('/feed')).map(a=>({id:a.id,kind:a.kind,title:a.title,body:a.body,t:ts(a.created_at),photos:a.photos}));
+}
+async function loadScans(){try{db.scans=await api.req('/scans')}catch(e){db.scans=[]}if(tab==='scan')renderLog()}
+// Real-time (Socket.IO): chat at status updates
+function connect(){
+ if(socket)socket.disconnect();
+ socket=io({auth:{token:api.token}});
+ // Chat: show live if that thread is open, otherwise flag it as unread
+ socket.on('message',m=>{const pid=String(m.parent_id),open=(cur.role==='parent'&&tab==='chat')||(cur.role==='admin'&&tab==='inbox'&&thread===pid);
+  if(open){if(!db.msgs.some(x=>x.id===m.id))db.msgs.push(mapMsg(m));drawChat()}
+  else if(m.sender_role!==cur.role){unread[pid]=1;toast('💬 New message from '+m.sender_name);if(tab==='inbox')drawPlist()}});
+ // QR scan result
+ socket.on('status',s=>{const c=db.children.find(c=>c.id===String(s.childId));if(!c)return;c.status=s.status;
+  if(cur.role==='admin')loadScans();
+  else db.mail.unshift({id:uid(),childId:c.id,t:Date.now(),subject:c.name+(s.status==='at_school'?' arrived safely at school':' is safely headed home'),body:'Check-in recorded at '+fmt(Date.now())+'. A notification email was sent to your Gmail.'});
+  if(tab==='students')view();refreshStatus()});
+ // New classroom activity / announcement
+ socket.on('activity',()=>{if(cur.role!=='parent')return;toast('📣 New update from school');refresh().then(()=>{if(tab==='photos')view()})});
+}
+
+/* ===== Helpers ===== */
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid=()=>Math.random().toString(36).slice(2,9);
+const me=()=>cur;
+const fmt=t=>new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+let tab=null,mode='login',role='parent',selChild=null,tags=[],chatCid=null,scanner=null,lastScan=0,pendingPhoto=null;
+
+function toast(msg,type){const d=document.createElement('div');d.className='glass fade p-3 text-sm '+(type==='bad'?'!border-rose-500':'');d.textContent=msg;$('#toasts').append(d);setTimeout(()=>d.remove(),3500)}
+function mailToast(m){const d=document.createElement('div');d.className='glass fade p-3 text-sm !border-emerald-400';
+ d.innerHTML=`<div class="text-xs text-slate-400">📧 Email notification</div><div class="text-xs">To: ${esc(m.to)}</div><div class="font-semibold mt-1">${esc(m.subject)}</div><div class="text-slate-300 text-xs mt-1">${esc(m.body)}</div>`;
+ $('#toasts').append(d);setTimeout(()=>d.remove(),7000)}
+function openModal(h){$('#modal').innerHTML=`<div class="fixed inset-0 z-50 grid place-items-center p-4 bg-black/70 backdrop-blur-sm" onclick="if(event.target===this)closeModal()"><div class="glass fade p-4 w-full max-w-md max-h-[90vh] overflow-auto !bg-slate-900/90">${h}<button class="btn2 w-full mt-3" onclick="closeModal()">Close</button></div></div>`}
+const closeModal=()=>{$('#modal').innerHTML=''};
+
+/* ===== Validation ===== */
+const rules={req:v=>v.trim()?'':'Required',email:v=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)?'':'Enter a valid email',pw:v=>v.length>=6?'':'At least 6 characters',phone:v=>/^[\d+\s-]{7,15}$/.test(v)?'':'Enter a valid number',match:v=>v===$('#pw').value?'':'Passwords don’t match'};
+function chk(el){const r=el.dataset.rule;if(!r)return true;const m=rules[r](el.value),p=el.parentElement;p.classList.toggle('bad',!!m);p.classList.toggle('ok',!m&&!!el.value);p.querySelector('.err').textContent=m;return !m}
+const chkAll=sel=>[...document.querySelectorAll(sel+' [data-rule]')].map(chk).every(Boolean);
+const fl=(id,label,type='text',rule='req',extra='')=>`<div class="fl"><input id="${id}" type="${type}" placeholder=" " data-rule="${rule}" oninput="chk(this)" onblur="chk(this)" autocomplete="off" ${extra}><label>${label}</label><p class="err"></p></div>`;
+
+/* ===== Auth ===== */
+function authView(){
+ $('#app').innerHTML=`<main class="min-h-screen grid place-items-center p-4"><div id="authcard" class="glass fade w-full max-w-md p-6">
+ <div class="text-center mb-5"><div class="text-5xl float">🛰️</div><h1 class="text-3xl font-bold neon">KidsCare</h1><p class="text-slate-400 text-sm">School QR & Messaging System</p></div>
+ <div class="grid grid-cols-2 gap-1 p-1 rounded-xl bg-white/5 mb-4">${['login','signup'].map(m=>`<button class="tabb ${mode===m?'on':''}" onclick="mode='${m}';authView()">${m==='login'?'Log in':'Sign up'}</button>`).join('')}</div>
+ ${mode==='login'?`<form id="f" onsubmit="doLogin(event)">
+  <div class="flex gap-2 mb-3">${['parent','admin'].map(r=>`<button type="button" class="chip ${role===r?'on':''} cursor-pointer" onclick="setRole('${r}')">${r==='parent'?'👪 Parent':'🛡️ Admin'}</button>`).join('')}</div>
+  ${fl('em','Email','email','email')}${fl('pw','Password','password','pw')}
+  <button class="btn w-full">Log in as ${role}</button>
+  ${role==='admin'?'':''}</form>`
+ :`<form id="f" onsubmit="doSignup(event)"><p class="text-xs text-slate-400 mb-3">Sign-up is for 👪 Parents only. Staff accounts are created by the school.</p>
+  ${fl('nm','Full name')}${fl('em','Email','email','email')}${fl('pw','Password','password','pw')}${fl('pw2','Confirm password','password','match')}
+  <button class="btn w-full">Create parent account</button></form>`}
+ <div class="flex items-center gap-2 my-4 text-xs text-slate-500"><hr class="flex-1 border-white/10">or<hr class="flex-1 border-white/10"></div>
+ <div id="gbtn" class="flex justify-center min-h-[2.5rem]"></div></div></main>`;setTimeout(initGoogle,0)}
+const setRole=r=>{role=r;authView()}; // avoids clash with the built-in element.role property in inline handlers
+function bad(){const c=$('#authcard');c.classList.remove('shake');void c.offsetWidth;c.classList.add('shake')}
+async function afterAuth(d){api.setToken(d.token);cur=d.user;tab=null;connect();await refresh();go()}
+async function doLogin(e){e.preventDefault();if(!chkAll('#f'))return bad();
+ try{await afterAuth(await api.req('/login',{method:'POST',body:{email:$('#em').value,password:$('#pw').value,role}}))}catch(err){toast(err.message,'bad');bad()}}
+async function doSignup(e){e.preventDefault();if(!chkAll('#f'))return bad();
+ try{const d=await api.req('/signup',{method:'POST',body:{name:$('#nm').value,email:$('#em').value,password:$('#pw').value}});toast('Welcome aboard, '+d.user.name+'!');await afterAuth(d)}catch(err){toast(err.message,'bad');bad()}}
+async function initGoogle(){const el=$('#gbtn');if(!el)return;
+ try{const{googleClientId}=await api.req('/config');
+  if(!googleClientId||!window.google){el.innerHTML='<span class="text-xs text-slate-500">Google login is not configured yet</span>';return}
+  google.accounts.id.initialize({client_id:googleClientId,callback:async r=>{try{await afterAuth(await api.req('/google',{method:'POST',body:{credential:r.credential}}))}catch(err){toast(err.message,'bad')}}});
+  google.accounts.id.renderButton(el,{theme:'filled_black',size:'large',width:300})}catch(e){}}
+function logout(){stopScan();api.setToken(null);cur=null;loadedCid=null;chatCid=null;thread=null;unread={};if(socket){socket.disconnect();socket=null}db={users:[],children:[],photos:[],feed:[],scans:[],msgs:[],mail:[]};closeModal();mode='login';authView()}
+
+/* ===== Shell ===== */
+const TABS={parent:[['add','➕','Add child'],['photos','📣','Updates'],['qr','📲','QR pass'],['chat','💬','Messages']],admin:[['scan','📷','Scanner'],['photo','📣','Post update'],['students','🎓','Students'],['parents','👪','Parents'],['inbox','💬','Inbox']]};
+function go(){const u=me();if(!u)return authView();
+ tab=tab||TABS[u.role][0][0];
+ $('#app').innerHTML=`<header class="sticky z-40 backdrop-blur-xl bg-slate-950/70 border-b border-cyan-400/20" style="top:env(safe-area-inset-top,0px)"><div class="max-w-5xl mx-auto px-3 py-2 flex items-center gap-3">
+  <div class="text-xl neon font-bold">🛰️ KidsCare</div><div class="ml-auto text-right text-xs"><div class="font-semibold">${esc(u.name)}</div><div class="text-violet-300">${u.role}</div></div>
+  <button class="btn2 !py-1" onclick="logout()">Log out</button></div>
+  <nav class="max-w-5xl mx-auto px-3 pb-2 flex gap-1 overflow-x-auto">${TABS[u.role].map(t=>`<button class="tabb ${tab===t[0]?'on':''}" onclick="setTab('${t[0]}')">${t[1]} ${t[2]}</button>`).join('')}</nav></header>
+  <main id="view" class="max-w-5xl mx-auto p-3 sm:p-5"></main>`;view()}
+async function setTab(t){stopScan();tab=t;try{await refresh()}catch(e){}go()}
+const mine=()=>db.children;
+const badge=c=>c.status==='at_school'?'<span class="chip !border-emerald-400 !bg-emerald-400/20">🟢 At school</span>':'<span class="chip">🏠 Home</span>';
+function view(){const v={add:addView,photos:feedView,qr:qrView,chat:chatView,scan:scanView,photo:postView,students:studentsView,parents:parentsView,inbox:inboxView}[tab];$('#view').innerHTML=`<div class="fade">${v()}</div>`;
+ if(tab==='qr')afterQr();if(tab==='scan')renderLog();if(tab==='chat')openThread('me');if(tab==='inbox')inboxInit();if(tab==='photo'){audOpts();loadPosts()}}
+
+/* ===== Parent: add child ===== */
+function addView(){tags=[];const kids=mine();
+ return `<div class="grid md:grid-cols-2 gap-4"><form id="cf" class="glass p-5" onsubmit="addChild(event)"><h2 class="text-lg font-bold neon mb-3">Register your child</h2>
+ ${fl('cn','Full name')}${fl('cr','Classroom / Grade level')}${fl('ca','Address')}
+ <div class="grid grid-cols-2 gap-3">${fl('cd','Date of birth','date','req','oninput="autoAge()"')}${fl('cg','Age','number','req','min="0" max="18"')}</div>
+ ${fl('cp','Contact number','tel','phone')}${fl('en','Emergency contact name')}${fl('ep','Emergency contact number','tel','phone')}${fl('cm','Medical / emergency notes (optional)','text','')}
+ <div class="fl"><input id="tg" placeholder=" " onkeydown="tagKey(event)"><label>Allergies (press Enter to add)</label></div><div id="tagbox" class="mb-3"></div>
+ <button class="btn w-full">Save child & generate QR</button></form>
+ <div class="glass p-5"><h2 class="text-lg font-bold neon mb-3">My children</h2>${kids.length?kids.map(c=>`<div class="p-3 mb-2 rounded-xl bg-white/5 flex items-center gap-3"><div class="text-2xl">🧒</div><div class="flex-1"><div class="font-semibold">${esc(c.name)}</div><div class="text-xs text-slate-400">Age ${esc(c.age)} · ${c.allergies.length?esc(c.allergies.join(', ')):'No allergies'}</div></div>${badge(c)}</div>`).join(''):'<p class="text-slate-400 text-sm">No children yet. Fill in the form to add one.</p>'}</div></div>`}
+function autoAge(){const d=new Date($('#cd').value);if(isNaN(d))return;const a=Math.floor((Date.now()-d)/31557600000);$('#cg').value=Math.max(a,0);chk($('#cg'));chk($('#cd'))}
+function tagKey(e){if(e.key!=='Enter'&&e.key!==',')return;e.preventDefault();const v=e.target.value.trim();if(v&&!tags.includes(v))tags.push(v);e.target.value='';drawTags()}
+const drawTags=()=>{$('#tagbox').innerHTML=tags.map((t,i)=>`<span class="chip cursor-pointer" onclick="tags.splice(${i},1);drawTags()">${esc(t)} ✕</span>`).join('')};
+async function addChild(e){e.preventDefault();const tv=$('#tg').value.trim();if(tv&&!tags.includes(tv))tags.push(tv);if(!chkAll('#cf'))return toast('Please fix the highlighted fields','bad');
+ try{const c=await api.req('/children',{method:'POST',body:{name:$('#cn').value,address:$('#ca').value,dob:$('#cd').value,age:$('#cg').value,phone:$('#cp').value,classroom:$('#cr').value,emergency_name:$('#en').value,emergency_phone:$('#ep').value,medical_notes:$('#cm').value,allergies:tags}});
+  await refresh();selChild=String(c.id);toast(c.name+' registered – QR code ready!');tab='qr';go()}catch(err){toast(err.message,'bad')}}
+
+/* ===== Parent: photos ===== */
+function feedView(){const a=db.feed;return `<h2 class="text-lg font-bold neon mb-3">📣 Classroom updates</h2>${a.length?a.map(x=>`<article class="glass p-4 mb-3"><div class="flex items-center gap-2 text-xs text-slate-400"><span class="chip">${x.kind==='announcement'?'📢 Announcement':'🎨 Activity'}</span>${new Date(x.t).toLocaleDateString()}</div><h3 class="font-bold mt-1">${esc(x.title)}</h3><p class="text-sm text-slate-300 whitespace-pre-line">${esc(x.body)}</p>${x.photos.length?`<div class="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3">${x.photos.map(u=>`<button onclick="showPhoto('${u}')"><img src="${u}" alt="" class="w-full h-32 object-cover rounded-lg"></button>`).join('')}</div>`:''}</article>`).join(''):'<div class="glass p-8 text-center text-slate-400">No updates yet. Activities and announcements from your teacher will appear here.</div>'}`}
+function showPhoto(u){openModal(`<img src="${u}" alt="" class="w-full rounded-xl">`)}
+
+/* ===== QR + chat ===== */
+function qrPng(text){const q=qrcode(0,'M');q.addData(text);q.make();const n=q.getModuleCount(),s=10,m=20,c=document.createElement('canvas');c.width=c.height=n*s+2*m;const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.fillStyle='#0b1020';
+ for(let r=0;r<n;r++)for(let k=0;k<n;k++)if(q.isDark(r,k))x.fillRect(m+k*s,m+r*s,s,s);return c.toDataURL('image/png')}
+function qrView(){const kids=mine();if(!kids.length)return `<div class="glass p-8 text-center"><p class="text-slate-300 mb-3">Add a child first to get a QR code.</p><button class="btn" onclick="setTab('add')">Add child</button></div>`;
+ if(!kids.find(k=>k.id===selChild))selChild=kids[0].id;const c=kids.find(k=>k.id===selChild);
+ return `<div class="mb-3">${kids.map(k=>`<button class="chip cursor-pointer ${k.id===selChild?'on':''}" onclick="selChild='${k.id}';view()">${esc(k.name)}</button>`).join('')}</div>
+ <div class="glass p-5 text-center max-w-md mx-auto"><h2 class="font-bold neon">${esc(c.name)}’s QR pass</h2><div class="text-xs text-slate-400 mb-2">${esc(c.code)} · ${esc(c.classroom||'No classroom')}</div>
+  <img src="${qrOf(c.id)}" alt="QR code" class="mx-auto w-52 h-52 rounded-xl shadow-[0_0_30px_rgba(34,211,238,.5)]"><div id="stat" class="mt-3">${badge(c)}</div>
+  <div class="flex gap-2 justify-center mt-3"><button class="btn" onclick="dlQr('${c.id}')">⬇ Download</button><button class="btn2" onclick="printQr('${c.id}')">🖨 Print</button></div>
+  <h3 class="text-left text-sm font-semibold mt-5 mb-1">📧 Gmail notifications</h3><p class="text-left text-xs text-slate-400 mb-2">Each time the teacher scans this pass, an email goes to your registered Gmail.</p><div id="mailbox" class="text-left text-xs space-y-2"></div></div>`}
+function afterQr(){refreshStatus()}
+function refreshStatus(){const c=db.children.find(c=>c.id===selChild);if($('#stat')&&c)$('#stat').innerHTML=badge(c);
+ const b=$('#mailbox');if(b){const ms=db.mail.filter(m=>m.childId===selChild).slice(0,4);b.innerHTML=ms.length?ms.map(m=>`<div class="p-2 rounded-lg bg-white/5"><div class="font-semibold">${esc(m.subject)}</div><div class="text-slate-400">${esc(m.body)}</div></div>`).join(''):'<p class="text-slate-500">New check-ins will show up here.</p>'}}
+
+/* ----- Messaging: parent <-> teacher/admin (one thread per parent) ----- */
+let thread=null,unread={};
+const chatUrl=()=>cur.role==='admin'?'/chat/'+thread:'/chat';
+const chatBox=ph=>`<div id="chatbox" class="flex-1 min-h-[18rem] max-h-[28rem] overflow-auto space-y-2 p-2 rounded-xl bg-black/30"></div><div class="flex gap-2 mt-3"><input id="ci" class="flex-1 rounded-xl bg-white/5 border border-white/20 px-3 py-2 outline-none focus:border-cyan-400" placeholder="${ph}" onkeydown="if(event.key==='Enter')sendMsg()"><button class="btn" onclick="sendMsg()">Send</button></div>`;
+function chatView(){return `<div class="glass p-4 flex flex-col max-w-2xl mx-auto"><h2 class="font-bold neon mb-1">💬 Messages</h2><p class="text-xs text-slate-400 mb-3">Private chat between you and your child’s teacher / school admin.</p>${chatBox('Message the teacher…')}</div>`}
+async function openThread(t){thread=t;delete unread[t];try{db.msgs=(await api.req(chatUrl())).map(mapMsg)}catch(e){db.msgs=[]}drawChat()}
+function drawChat(){const b=$('#chatbox');if(!b)return;b.innerHTML=db.msgs.length?db.msgs.map(m=>`<div class="bub ${m.from===cur.role?'me':'them'}"><div class="text-[10px] opacity-70">${esc(m.name)} · ${fmt(m.t)}</div>${esc(m.text)}</div>`).join(''):'<p class="text-slate-500 text-sm text-center mt-6">Say hello 👋</p>';b.scrollTop=b.scrollHeight}
+async function sendMsg(){const i=$('#ci'),t=i.value.trim();if(!t)return;i.value='';try{await api.req(chatUrl(),{method:'POST',body:{text:t}})}catch(err){toast(err.message,'bad')}}
+// Admin inbox: pick a parent, read and reply
+function inboxView(){return `<div class="grid md:grid-cols-3 gap-4"><div class="glass p-3"><h2 class="font-bold neon mb-2">Parents</h2><div id="plist" class="space-y-1"></div></div><div class="glass p-4 md:col-span-2 flex flex-col"><h2 id="ihead" class="font-bold neon mb-2">Select a parent to reply</h2><div id="ibox" class="flex-1 flex flex-col"></div></div></div>`}
+function inboxInit(){drawPlist();if(thread&&thread!=='me')pickParent(thread)}
+function drawPlist(){const l=$('#plist');if(l)l.innerHTML=db.users.map(p=>`<button class="w-full text-left p-2 rounded-lg ${p.id===thread?'bg-cyan-400/15':'bg-white/5'}" onclick="pickParent('${p.id}')">${unread[p.id]?'🔴 ':''}${esc(p.name)}<div class="text-xs text-slate-400">${esc(p.email)}</div></button>`).join('')||'<p class="text-slate-500 text-sm">No parents yet.</p>'}
+async function pickParent(id){thread=id;const p=db.users.find(u=>u.id===id);$('#ihead').textContent='💬 '+(p?p.name:'Parent');$('#ibox').innerHTML=chatBox('Reply to parent…');drawPlist();await openThread(id)}
+function dlQr(id){const c=db.children.find(c=>c.id===id),a=document.createElement('a');a.href=qrOf(id);a.download='qr-'+c.name.replace(/\s+/g,'-')+'.png';a.click()}
+function printQr(id){const c=db.children.find(c=>c.id===id);$('#printArea').innerHTML=`<h1 style="font:bold 28px sans-serif">KidsCare QR Pass</h1><img src="${qrOf(id)}" style="width:320px;margin:20px auto"><h2 style="font:24px sans-serif">${esc(c.name)}</h2><p>Scan at school entry and exit</p>`;setTimeout(()=>window.print(),100)}
+
+/* ===== Admin: scanner ===== */
+function scanView(){return `<div class="grid md:grid-cols-2 gap-4"><div class="glass p-5"><h2 class="font-bold neon mb-3">📷 QR scanner</h2>
+ <div id="reader" class="rounded-xl overflow-hidden bg-black/50 min-h-[12rem] grid place-items-center text-slate-500 text-sm">Camera is off</div>
+ <div class="flex flex-wrap gap-2 mt-3"><button class="btn" onclick="startScan()">Start camera</button><button class="btn2" onclick="stopScan()">Stop</button>
+  <label class="btn2 cursor-pointer">🖼 Upload QR image<input type="file" accept="image/*" class="hidden" onchange="scanFile(this)"></label></div><div id="qrfile" class="hidden"></div>
+ <div class="fl mt-5 !mb-2"><select id="sim">${db.children.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')||'<option value="">No students yet</option>'}</select><label>Or simulate a scan</label></div>
+ <button class="btn2 w-full" onclick="handleScan('KIDSCARE:'+$('#sim').value)">Simulate scan</button></div>
+ <div class="glass p-5"><h2 class="font-bold neon mb-3">Recent check-ins</h2><div id="log" class="space-y-2 text-sm"></div></div></div>`}
+// Read a QR code from a photo/screenshot on the device
+async function scanFile(inp){const f=inp.files[0];if(!f)return;
+ try{const t=await new Html5Qrcode('qrfile').scanFile(f,false);await handleScan(t)}catch(e){toast('No QR code found in that image','bad')}inp.value=''}
+function startScan(){stopScan();if(typeof Html5Qrcode==='undefined')return toast('Scanner library unavailable – use the simulator','bad');
+ scanner=new Html5Qrcode('reader');$('#reader').innerHTML='';
+ scanner.start({facingMode:'environment'},{fps:10,qrbox:200},t=>{if(Date.now()-lastScan<4000)return;lastScan=Date.now();handleScan(t)},()=>{}).catch(()=>{scanner=null;$('#reader').textContent='Camera unavailable';toast('Camera unavailable – use the simulator','bad')})}
+function stopScan(){if(scanner){const s=scanner;scanner=null;s.stop().then(()=>s.clear()).catch(()=>{})}}
+async function handleScan(txt){const raw=String(txt).replace('KIDSCARE:',''),c=db.children.find(c=>c.id===raw);
+ try{const r=await api.req('/scan',{method:'POST',body:{token:c?c.token:raw}});mailToast({to:r.emailedTo,subject:r.subject,body:r.body});
+  if(r.emailStatus!=='sent')toast('Check-in saved, but the email could not be sent. Check the Gmail settings.','bad')}catch(err){toast(err.message,'bad')}}
+function renderLog(){const l=$('#log');if(l)l.innerHTML=db.scans.slice(0,8).map(s=>`<div class="p-2 rounded-lg bg-white/5"><div>${s.type==='arrival'?'🟢 Arrived':'🏠 Left'} · ${esc(s.name)}</div><div class="text-xs text-slate-400">${new Date(ts(s.created_at)).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} · ${s.email_status==='sent'?'📧 emailed '+esc(s.parent_email):'⚠️ email '+esc(s.email_status||'pending')}</div></div>`).join('')||'<p class="text-slate-500">No scans yet.</p>'}
+
+/* ===== Admin: activities & announcements ===== */
+let postFiles=[];
+function postView(){postFiles=[];return `<div class="grid md:grid-cols-2 gap-4"><div class="glass p-5"><h2 class="font-bold neon mb-3">📣 New activity / announcement</h2>
+ <div class="fl"><select id="pk"><option value="activity">🎨 Classroom activity</option><option value="announcement">📢 Announcement</option></select><label>Type</label></div>
+ ${fl('ptl','Title')}
+ <div class="fl"><textarea id="pm" rows="3" placeholder=" "></textarea><label>Message (optional)</label></div>
+ <div class="grid grid-cols-2 gap-3"><div class="fl"><select id="pt" onchange="audOpts()"><option value="all">All students</option><option value="classroom">A classroom</option><option value="child">One student</option></select><label>Audience</label></div><div class="fl"><select id="pa" onchange="countRecip()"></select><label>Who</label></div></div>
+ <label class="block border-2 border-dashed border-cyan-400/50 rounded-xl p-4 text-center cursor-pointer hover:bg-cyan-400/10 mb-3"><input type="file" accept="image/*" multiple class="hidden" onchange="pickPhotos(this)"><div id="pv">📸 Add photos (optional, up to 5)</div></label>
+ <label class="flex items-center gap-3 p-3 rounded-xl bg-white/5 mb-3 cursor-pointer"><input id="pn" type="checkbox" class="w-5 h-5 accent-cyan-400"><span class="text-sm">📧 Also email parents’ Gmail now <span class="text-slate-400">(<b id="rc">0</b> parents)</span></span></label>
+ <button class="btn w-full" onclick="sendPost()">Publish</button></div>
+ <div class="glass p-5"><h2 class="font-bold neon mb-3">Recent posts</h2><div id="posts" class="space-y-2 text-sm"></div></div></div>`}
+function audOpts(){const t=$('#pt'),s=$('#pa');if(!t||!s)return;
+ if(t.value==='classroom'){const cl=[...new Set(db.children.map(c=>c.classroom).filter(Boolean))];s.innerHTML=cl.map(c=>`<option>${esc(c)}</option>`).join('')||'<option value="">No classrooms yet</option>'}
+ else if(t.value==='child')s.innerHTML=db.children.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')||'<option value="">No students</option>';
+ else s.innerHTML='<option value="">Everyone</option>';
+ countRecip()}
+function countRecip(){const e=$('#rc');if(!e)return;const t=$('#pt').value,v=$('#pa').value;
+ e.textContent=new Set(db.children.filter(c=>t==='all'||(t==='classroom'&&c.classroom===v)||(t==='child'&&c.id===v)).map(c=>c.parentId)).size}
+const shrink=f=>new Promise(res=>{const im=new Image();im.onload=()=>{const k=Math.min(1,1280/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);c.toBlob(res,'image/jpeg',.8)};im.src=URL.createObjectURL(f)});
+async function pickPhotos(inp){postFiles=[];for(const f of [...inp.files].slice(0,5))postFiles.push(await shrink(f));$('#pv').textContent='📸 '+postFiles.length+' photo(s) ready'}
+async function sendPost(){if(!chk($('#ptl')))return;const fd=new FormData();
+ fd.append('kind',$('#pk').value);fd.append('title',$('#ptl').value.trim());fd.append('message',$('#pm').value.trim());fd.append('targetType',$('#pt').value);fd.append('targetValue',$('#pa').value);fd.append('notify',$('#pn').checked?'1':'0');
+ postFiles.forEach((b,i)=>fd.append('photos',b,'photo'+i+'.jpg'));
+ try{const r=await api.req('/activities',{method:'POST',body:fd});toast(r.emailing?'Posted! Emailing '+r.recipients+' parent(s)…':'Posted ✨');setTab('photo')}catch(err){toast(err.message,'bad')}}
+async function loadPosts(){try{const l=await api.req('/activities'),b=$('#posts');if(b)b.innerHTML=l.map(a=>`<div class="p-2 rounded-lg bg-white/5"><div>${a.kind==='announcement'?'📢':'🎨'} <b>${esc(a.title)}</b></div><div class="text-xs text-slate-400">${new Date(ts(a.created_at)).toLocaleString()} · ${a.photos} photo(s) · ${a.notify?'📧 '+a.emails_sent+'/'+a.recipients+' sent'+(a.emails_failed?', '+a.emails_failed+' failed':''):'no email'}</div></div>`).join('')||'<p class="text-slate-500">No posts yet.</p>'}catch(e){}}
+
+/* ===== Admin: lists ===== */
+function studentsView(){return `<div class="flex items-center gap-3 mb-3"><h2 class="font-bold neon flex-1">🎓 Students (${db.children.length})</h2><input class="rounded-xl bg-white/5 border border-white/20 px-3 py-2 text-sm outline-none focus:border-cyan-400" placeholder="Search name, ID, class…" oninput="filterStu(this.value)"></div>
+ <div class="glass divide-y divide-white/10">${db.children.map(c=>`<button class="stu w-full flex items-center gap-3 p-3 text-left hover:bg-cyan-400/10" data-q="${esc((c.name+' '+c.code+' '+c.classroom).toLowerCase())}" onclick="openStudent('${c.id}')"><div class="text-2xl">🧒</div><div class="flex-1"><div class="font-semibold">${esc(c.name)}</div><div class="text-xs text-slate-400">${esc(c.code)} · ${esc(c.classroom||'No classroom')}</div></div>${badge(c)}</button>`).join('')||'<p class="p-8 text-center text-slate-400">No students yet. Parents add them from their dashboard.</p>'}</div>`}
+function filterStu(q){q=q.toLowerCase();document.querySelectorAll('.stu').forEach(b=>b.style.display=b.dataset.q.includes(q)?'':'none')}
+function openStudent(id){const c=db.children.find(c=>c.id===id);
+ const row=(k,v)=>`<div class="flex justify-between gap-3 py-1 text-sm border-b border-white/5"><span class="text-slate-400">${k}</span><span class="text-right">${esc(v||'—')}</span></div>`;
+ const sec=(t,b)=>`<div class="mb-3"><h4 class="text-xs uppercase tracking-wider text-cyan-300 mb-1">${t}</h4>${b}</div>`;
+ openModal(`<div class="text-center mb-3"><img src="${qrOf(id)}" alt="QR" class="mx-auto w-28 rounded-lg"><h3 class="font-bold text-lg mt-2">${esc(c.name)}</h3><div class="text-xs text-slate-400">${esc(c.code)} · ${esc(c.classroom||'No classroom')}</div><div class="mt-1">${badge(c)}</div></div>
+ ${sec('Personal details',row('Full name',c.name)+row('Student ID',c.code)+row('Classroom',c.classroom)+row('Age',c.age)+row('Date of birth',c.dob)+row('Address',c.address))}
+ ${sec('Parent / guardian',row('Name',c.pname)+row('Gmail',c.pemail)+row('Contact number',c.phone))}
+ ${sec('Medical & emergency',row('Allergies',c.allergies.join(', ')||'None')+row('Medical notes',c.medical)+row('Emergency contact',c.emName)+row('Emergency number',c.emPhone))}
+ <button class="btn2 w-full" onclick="printQr('${id}')">🖨 Print QR</button>`)}
+function parentsView(){const ps=db.users.filter(u=>u.role==='parent');return `<h2 class="font-bold neon mb-3">👪 Parents (${ps.length})</h2><div class="grid sm:grid-cols-2 gap-3">${ps.map(p=>`<div class="glass p-4"><div class="font-semibold">${esc(p.name)}</div><div class="text-xs text-slate-400">${esc(p.email)}</div><div class="text-xs mt-1">Children: ${db.children.filter(c=>c.parentId===p.id).map(c=>esc(c.name)).join(', ')||'—'}</div></div>`).join('')||'<div class="glass p-8 text-center text-slate-400 sm:col-span-2">No parents registered yet.</div>'}</div>`}
+
+/* ===== Start ===== */
+cur=api.token?userFromToken(api.token):null;
+if(cur){connect();refresh().then(go).catch(()=>logout())}else go();
+</script>
+</body>
+</html>
