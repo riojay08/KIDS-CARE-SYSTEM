@@ -1,5 +1,5 @@
 // ============================================================
-// KidsCare server.js  (kumpletong file, i-save sa root ng project)
+// KidsCare server.js  (kumpletong file)
 // ============================================================
 require('dotenv').config();
 const fs = require('fs');
@@ -166,7 +166,6 @@ app.post('/api/scan', auth(['admin']), async (req, res) => {
   const body = `Hi ${child.parent_name}, ${child.name} ${arriving ? 'has safely arrived at school' : 'has left school and is safely headed home'} at ${time}.`;
   const html = mailHtml(esc(subject), `<p>${esc(body)}</p><p style="color:#64748b;font-size:13px">Student ID: ${esc(child.student_code)}</p>`);
 
-  // Email the parent's registered Gmail and store the result on the scan record
   const emailStatus = await sendEmail(child.parent_email, subject, body, 'scan', html);
   db.prepare('UPDATE scans SET email_status = ? WHERE id = ?').run(emailStatus, scan.lastInsertRowid);
 
@@ -184,7 +183,7 @@ app.get('/api/parents', auth(['admin']), (req, res) => {
   res.json(db.prepare("SELECT id, name, email FROM users WHERE role = 'parent' ORDER BY name").all());
 });
 
-// ---------- Activities & Announcements (photos + optional email blast) ----------
+// ---------- Activities & Announcements ----------
 const upload = multer({
   storage: multer.diskStorage({
     destination: path.join(__dirname, 'uploads'),
@@ -194,14 +193,12 @@ const upload = multer({
   fileFilter: (req, file, cb) => cb(null, ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype))
 });
 
-// Which students does a post target?
 function targetChildren(type, value) {
   if (type === 'child') return db.prepare('SELECT * FROM children WHERE id = ?').all(value);
   if (type === 'classroom') return db.prepare('SELECT * FROM children WHERE classroom = ?').all(value);
   return db.prepare('SELECT * FROM children').all();
 }
 
-// Runs in the background so the admin does not wait; progress is stored on the activity row.
 async function emailParents(activityId, a, parentIds) {
   const parents = db.prepare(`SELECT name, email FROM users WHERE id IN (${parentIds.map(() => '?').join(',')})`).all(...parentIds);
   const link = process.env.PUBLIC_URL ? `<p><a href="${esc(process.env.PUBLIC_URL)}">Open KidsCare</a></p>` : '';
@@ -242,7 +239,6 @@ app.get('/api/activities', auth(['admin']), (req, res) => {
     FROM activities a ORDER BY a.id DESC LIMIT 15`).all());
 });
 
-// Parent feed: only posts that target this parent's children
 app.get('/api/feed', auth(['parent']), (req, res) => {
   const me = req.user.id;
   const rows = db.prepare(`SELECT a.* FROM activities a
@@ -254,7 +250,7 @@ app.get('/api/feed', auth(['parent']), (req, res) => {
   res.json(rows.map(a => ({ id: a.id, kind: a.kind, title: a.title, body: a.body, created_at: a.created_at, photos: ph.all(a.id).map(p => '/uploads/' + p.file) })));
 });
 
-// ---------- Parent <-> Teacher/Admin chat (one thread per parent) ----------
+// ---------- Chat ----------
 const CHAT_SQL = `SELECT m.id, m.parent_id, m.text, m.created_at, u.name AS sender_name, u.role AS sender_role
   FROM chat_messages m JOIN users u ON u.id = m.sender_id`;
 const getThread = pid => db.prepare(CHAT_SQL + ' WHERE m.parent_id = ? ORDER BY m.id').all(pid);
@@ -265,10 +261,10 @@ function postChat(req, res, pid) {
   if (!db.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'parent'").get(pid)) return res.status(404).json({ error: 'Parent not found' });
   const info = db.prepare('INSERT INTO chat_messages (parent_id, sender_id, text) VALUES (?, ?, ?)').run(pid, req.user.id, text);
   const msg = db.prepare(CHAT_SQL + ' WHERE m.id = ?').get(info.lastInsertRowid);
-  io.to(`parent:${pid}`).to('staff').emit('message', msg);   // parent room + all staff
+  io.to(`parent:${pid}`).to('staff').emit('message', msg);
   res.json(msg);
 }
-// Parents can only reach their own thread; only admins can open any thread.
+
 app.get('/api/chat', auth(['parent']), (req, res) => res.json(getThread(req.user.id)));
 app.post('/api/chat', auth(['parent']), (req, res) => postChat(req, res, req.user.id));
 app.get('/api/chat/:pid', auth(['admin']), (req, res) => res.json(getThread(Number(req.params.pid))));
@@ -287,6 +283,12 @@ io.on('connection', socket => {
   socket.join(socket.user.role === 'admin' ? 'staff' : `parent:${socket.user.id}`);
 });
 
-// ---------- Start ----------
+// ---------- Catch-All Route para sa Frontend (I-fix ang Not Found sa Render) ----------
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// ---------- Start Server ----------
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`KidsCare running at http://localhost:${PORT}`));
+```[cite: 3]
