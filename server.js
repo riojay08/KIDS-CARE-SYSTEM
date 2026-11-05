@@ -1,5 +1,5 @@
 // ============================================================
-// KidsCare server.js  (kumpletong file)
+// KidsCare server.js (Clean Version)
 // ============================================================
 require('dotenv').config();
 const fs = require('fs');
@@ -30,7 +30,6 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 const signToken = u =>
   jwt.sign({ id: u.id, role: u.role, name: u.name }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
-// Middleware: tinitingnan kung naka-login (at kung tama ang role)
 function auth(roles) {
   return (req, res, next) => {
     try {
@@ -44,12 +43,6 @@ function auth(roles) {
   };
 }
 
-// Admin: lahat ng bata. Parent: sariling anak lang.
-function canAccessChild(user, childId) {
-  if (user.role === 'admin') return true;
-  return !!db.prepare('SELECT 1 FROM children WHERE id = ? AND parent_id = ?').get(childId, user.id);
-}
-
 const toChild = c => ({ ...c, allergies: JSON.parse(c.allergies || '[]') });
 
 const mailer = nodemailer.createTransport({
@@ -59,7 +52,6 @@ const mailer = nodemailer.createTransport({
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-// Simple branded HTML wrapper for all emails
 const mailHtml = (title, bodyHtml) => `
 <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
   <div style="background:#0891b2;color:#fff;padding:14px 18px;font-weight:bold">KidsCare</div>
@@ -67,7 +59,6 @@ const mailHtml = (title, bodyHtml) => `
   <div style="padding:10px 18px;font-size:12px;color:#64748b">Automated message from KidsCare. Please do not reply to this email.</div>
 </div>`;
 
-// Sends one email and records the result in email_log. Returns 'sent' or 'failed'.
 async function sendEmail(to, subject, text, kind = 'general', html) {
   let status = 'sent', error = null;
   try {
@@ -81,7 +72,7 @@ async function sendEmail(to, subject, text, kind = 'general', html) {
   return status;
 }
 
-// ---------- Sign-up at login ----------
+// ---------- Routes ----------
 app.post('/api/signup', (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !email.includes('@') || !password || password.length < 6)
@@ -104,7 +95,6 @@ app.post('/api/login', (req, res) => {
   res.json({ token: signToken(u), user: { id: u.id, role: u.role, name: u.name } });
 });
 
-// ---------- Google login ----------
 app.get('/api/config', (req, res) => res.json({ googleClientId: process.env.GOOGLE_CLIENT_ID || '' }));
 
 app.post('/api/google', async (req, res) => {
@@ -128,7 +118,6 @@ app.post('/api/google', async (req, res) => {
   }
 });
 
-// ---------- Mga bata at QR scan ----------
 app.get('/api/children', auth(), (req, res) => {
   const rows = req.user.role === 'admin'
     ? db.prepare('SELECT c.*, u.name AS parent_name, u.email AS parent_email FROM children c JOIN users u ON u.id = c.parent_id ORDER BY c.name').all()
@@ -183,7 +172,6 @@ app.get('/api/parents', auth(['admin']), (req, res) => {
   res.json(db.prepare("SELECT id, name, email FROM users WHERE role = 'parent' ORDER BY name").all());
 });
 
-// ---------- Activities & Announcements ----------
 const upload = multer({
   storage: multer.diskStorage({
     destination: path.join(__dirname, 'uploads'),
@@ -250,7 +238,6 @@ app.get('/api/feed', auth(['parent']), (req, res) => {
   res.json(rows.map(a => ({ id: a.id, kind: a.kind, title: a.title, body: a.body, created_at: a.created_at, photos: ph.all(a.id).map(p => '/uploads/' + p.file) })));
 });
 
-// ---------- Chat ----------
 const CHAT_SQL = `SELECT m.id, m.parent_id, m.text, m.created_at, u.name AS sender_name, u.role AS sender_role
   FROM chat_messages m JOIN users u ON u.id = m.sender_id`;
 const getThread = pid => db.prepare(CHAT_SQL + ' WHERE m.parent_id = ? ORDER BY m.id').all(pid);
@@ -270,7 +257,6 @@ app.post('/api/chat', auth(['parent']), (req, res) => postChat(req, res, req.use
 app.get('/api/chat/:pid', auth(['admin']), (req, res) => res.json(getThread(Number(req.params.pid))));
 app.post('/api/chat/:pid', auth(['admin']), (req, res) => postChat(req, res, Number(req.params.pid)));
 
-// ---------- Sockets ----------
 io.use((socket, next) => {
   try {
     socket.user = jwt.verify(socket.handshake.auth.token, process.env.JWT_SECRET);
@@ -283,12 +269,9 @@ io.on('connection', socket => {
   socket.join(socket.user.role === 'admin' ? 'staff' : `parent:${socket.user.id}`);
 });
 
-// ---------- Catch-All Route para sa Frontend (I-fix ang Not Found sa Render) ----------
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ---------- Start Server ----------
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`KidsCare running at http://localhost:${PORT}`));
-```[cite: 3]
+server.listen(PORT, () => console.log(`KidsCare running at port ${PORT}`));
