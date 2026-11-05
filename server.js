@@ -1,5 +1,5 @@
 // ============================================================
-// KidsCare server.js (Clean Version)
+// KidsCare server.js (Fully Fixed & Production Ready)
 // ============================================================
 require('dotenv').config();
 const fs = require('fs');
@@ -269,9 +269,21 @@ io.on('connection', socket => {
   socket.join(socket.user.role === 'admin' ? 'staff' : `parent:${socket.user.id}`);
 });
 
-app.get('*', (req, res) => {
+// Safe Express Fallback Middleware (Ginagamit sa halip na app.get('*'))
+app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`KidsCare running at port ${PORT}`));
+```[cite: 5]
+
+---
+
+### Paano ito i-update at i-deploy:
+1. Palitan ang laman ng iyong `server.js` (o `server_2.js`) ng code sa itaas[cite: 5].
+2. I-run ang mga sumusunod sa iyong VS Code Terminal:
+   ```bash
+   git add .
+   git commit -m "Fix Express wildcard route error using middleware fallback"
+   git push origin main
