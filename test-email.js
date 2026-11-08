@@ -1,34 +1,21 @@
 // test-email.js
+// Usage: node test-email.js [recipient@email.com]
+// Uses Brevo HTTPS API when BREVO_API_KEY is set, otherwise Gmail SMTP.
 require('dotenv').config();
-const nodemailer = require('nodemailer');
+const { sendMail, emailProvider } = require('./utils/mailer');
 
-// Siguraduhing may laman ang mga kinakailangang env variables
-if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-  console.error('❌ ERROR: Nawawala ang GMAIL_USER o GMAIL_APP_PASSWORD sa iyong .env file!');
+if (!process.env.BREVO_API_KEY && (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD)) {
+  console.error('ERROR: Set BREVO_API_KEY, or GMAIL_USER + GMAIL_APP_PASSWORD in your .env file.');
   process.exit(1);
 }
 
-const mailer = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_APP_PASSWORD,
-  },
-});
-
 (async () => {
+  const to = process.argv[2] || process.env.MAIL_FROM || process.env.GMAIL_USER;
   try {
-    console.log('🔄 Sinusuri ang Gmail login credentials...');
-    await mailer.verify();
-    console.log('✅ OK: Tama ang Gmail login!');
-
-    // Kunin ang email address mula sa command line argument o gamitin ang sender email bilang default
-    const to = process.argv[2] || process.env.GMAIL_USER;
-
-    console.log(`✉️  Nagsusumite ng test email sa: ${to}...`);
-    const info = await mailer.sendMail({
-      from: `"KidsCare Notification" <${process.env.GMAIL_USER}>`,
-      to: to,
+    console.log(`Provider: ${emailProvider}`);
+    console.log(`Sending test email to: ${to} ...`);
+    const info = await sendMail({
+      to,
       subject: 'KidsCare Test Notification',
       text: 'Magandang araw! Kung nababasa mo ito, gumagana nang maayos ang notification system ng KidsCare.',
       html: `
@@ -42,13 +29,20 @@ const mailer = nodemailer.createTransport({
       `,
     });
 
-    console.log(`✅ EMAIL SENT SUCCESSFUL! Message ID: ${info.messageId}`);
-    console.log(`📬 I-check ang Inbox at Spam folder ni: ${to}`);
+    console.log(`EMAIL SENT SUCCESSFULLY! Message ID: ${info.messageId || '(none returned)'}`);
+    console.log(`Check the Inbox and Spam folder of: ${to}`);
   } catch (error) {
-    console.error('❌ FAILED:', error.message);
-    console.error('\n🔍 Troubleshooting Checklist:');
-    console.error(' 1. Siguraduhing NAKA-ON ang 2-Step Verification sa Google Account.');
-    console.error(' 2. Siguraduhing tama ang 16-character App Password (walang spaces).');
-    console.error(' 3. I-check kung may internet connection.');
+    console.error('FAILED:', error.message);
+    if (emailProvider === 'brevo') {
+      console.error('\nTroubleshooting checklist (Brevo):');
+      console.error(' 1. Tama ba ang BREVO_API_KEY?');
+      console.error(' 2. Verified ba ang MAIL_FROM (sender email) sa Brevo dashboard?');
+      console.error(' 3. Naubos na ba ang daily sending limit ng free plan (300/day)?');
+    } else {
+      console.error('\nTroubleshooting checklist (Gmail SMTP):');
+      console.error(' 1. Siguraduhing NAKA-ON ang 2-Step Verification sa Google Account.');
+      console.error(' 2. Siguraduhing tama ang 16-character App Password (walang spaces).');
+      console.error(' 3. I-check kung may internet connection at kung hindi blocked ang SMTP port.');
+    }
   }
 })();

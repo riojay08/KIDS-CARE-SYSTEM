@@ -125,15 +125,18 @@ db.exec(`
     notified INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
-  CREATE TABLE IF NOT EXISTS outbox (               -- notifications that failed and will be retried
+  CREATE TABLE IF NOT EXISTS outbox (               -- email notifications that failed and will be retried
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel TEXT NOT NULL,                          -- 'email' | 'sms'
+    channel TEXT NOT NULL,                          -- 'email' (SMS is no longer used)
     to_addr TEXT NOT NULL, subject TEXT, body TEXT, html TEXT,
     attempts INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'pending',                  -- 'pending' | 'sent' | 'failed'
+    status TEXT DEFAULT 'pending',                  -- 'pending' | 'sent' | 'failed' | 'skipped'
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+// SMS notifications were removed. Retire any queued SMS rows so they never retry.
+db.prepare("UPDATE outbox SET status = 'skipped' WHERE channel = 'sms' AND status = 'pending'").run();
 
 // Student ID for old and new rows, e.g. KC-2026-0007
 db.prepare(`UPDATE children SET student_code = 'KC-' || strftime('%Y','now') || '-' || printf('%04d', id)

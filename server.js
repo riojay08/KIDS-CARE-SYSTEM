@@ -11,7 +11,7 @@ const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
-const nodemailer = require('nodemailer');
+const { sendMail, emailProvider } = require('./utils/mailer');
 const db = require('./db');
 
 const UPLOAD_DIR = path.join(process.env.DATA_DIR || __dirname, 'uploads');   // same disk as the database
@@ -55,14 +55,8 @@ function canAccessChild(user, childId) {
 
 const toChild = c => ({ ...c, allergies: JSON.parse(c.allergies || '[]') });
 
-const mailer = nodemailer.createTransport({
-  service: 'gmail',
-  auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
-  // fail fast instead of hanging if the host blocks SMTP
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 15000
-});
+// Email goes through utils/mailer.js: Brevo HTTPS API when BREVO_API_KEY is set,
+// otherwise Gmail SMTP (local dev). This avoids Render's blocked SMTP ports.
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -78,7 +72,7 @@ const mailHtml = (title, bodyHtml) => `
 async function sendEmail(to, subject, text, kind = 'general', html) {
   let status = 'sent', error = null;
   try {
-    await mailer.sendMail({ from: `KidsCare <${process.env.GMAIL_USER}>`, to, subject, text, html });
+    await sendMail({ to, subject, text, html });
   } catch (e) {
     status = 'queued';
     error = e.message;
@@ -89,51 +83,15 @@ async function sendEmail(to, subject, text, kind = 'general', html) {
   return status;
 }
 
-// SMS gateway: SMS_PROVIDER = semaphore | twilio | none
-const SMS = (process.env.SMS_PROVIDER || 'none').toLowerCase();
-function smsNumber(n) {
-  const d = String(n || '').replace(/\D/g, '');
-  if (d.length < 10) return null;
-  const local = d.startsWith('63') ? '0' + d.slice(2) : (d.length === 10 && d.startsWith('9') ? '0' + d : d);
-  return SMS === 'twilio' ? '+63' + local.slice(1) : local;   // Semaphore: 09XXXXXXXXX, Twilio: +639XXXXXXXXX
-}
-async function rawSms(to, text) {
-  if (SMS === 'semaphore') {
-    const body = new URLSearchParams({ apikey: process.env.SEMAPHORE_API_KEY || '', number: to, message: text });
-    if (process.env.SEMAPHORE_SENDER) body.set('sendername', process.env.SEMAPHORE_SENDER);
-    const r = await fetch('https://api.semaphore.co/api/v4/messages', { method: 'POST', body });
-    if (!r.ok) throw new Error('Semaphore ' + r.status + ' ' + (await r.text()).slice(0, 120));
-  } else if (SMS === 'twilio') {
-    const sid = process.env.TWILIO_ACCOUNT_SID, tok = process.env.TWILIO_AUTH_TOKEN;
-    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
-      method: 'POST',
-      headers: { Authorization: 'Basic ' + Buffer.from(`${sid}:${tok}`).toString('base64') },
-      body: new URLSearchParams({ To: to, From: process.env.TWILIO_FROM || '', Body: text })
-    });
-    if (!r.ok) throw new Error('Twilio ' + r.status + ' ' + (await r.text()).slice(0, 120));
-  } else throw new Error('SMS is not configured');
-}
-// Returns 'sent', 'queued' (will retry) or 'skipped' (no provider or no valid number)
-async function sendSms(number, text, kind = 'general') {
-  const to = SMS === 'none' ? null : smsNumber(number);
-  if (!to) return 'skipped';
-  let status = 'sent', error = null;
-  try { await rawSms(to, text); }
-  catch (e) {
-    status = 'queued'; error = e.message;
-    db.prepare('INSERT INTO outbox (channel, to_addr, body) VALUES (?, ?, ?)').run('sms', to, text);
-  }
-  db.prepare('INSERT INTO email_log (to_email, subject, kind, status, error, channel) VALUES (?, ?, ?, ?, ?, ?)').run(to, text.slice(0, 60), kind, status, error, 'sms');
-  return status;
-}
+// SMS notifications were removed. Parents are notified by email only.
+// Any old queued SMS rows are retired by db.js on startup.
 
-// Retry failed notifications every 2 minutes, up to 5 attempts each
+// Retry failed email notifications every 2 minutes, up to 5 attempts each
 async function retryOutbox() {
-  const rows = db.prepare("SELECT * FROM outbox WHERE status = 'pending' AND attempts < 5 ORDER BY id LIMIT 20").all();
+  const rows = db.prepare("SELECT * FROM outbox WHERE channel = 'email' AND status = 'pending' AND attempts < 5 ORDER BY id LIMIT 20").all();
   for (const r of rows) {
     try {
-      if (r.channel === 'sms') await rawSms(r.to_addr, r.body);
-      else await mailer.sendMail({ from: `KidsCare <${process.env.GMAIL_USER}>`, to: r.to_addr, subject: r.subject, text: r.body, html: r.html || undefined });
+      await sendMail({ to: r.to_addr, subject: r.subject, text: r.body, html: r.html || undefined });
       db.prepare("UPDATE outbox SET status = 'sent' WHERE id = ?").run(r.id);
     } catch (e) {
       db.prepare("UPDATE outbox SET attempts = attempts + 1, status = CASE WHEN attempts + 1 >= 5 THEN 'failed' ELSE 'pending' END WHERE id = ?").run(r.id);
@@ -202,7 +160,7 @@ app.post('/api/scan', auth(['admin']), async (req, res) => {
   const status = timeIn ? 'at_school' : 'home';
 
   db.prepare('UPDATE children SET status = ? WHERE id = ?').run(status, child.id);
-  const scan = db.prepare('INSERT INTO scans (child_id, type, created_at, email_status, sms_status) VALUES (?, ?, ?, ?, ?)').run(child.id, mode, stamp, 'pending', 'pending');
+  const scan = db.prepare('INSERT INTO scans (child_id, type, created_at, email_status) VALUES (?, ?, ?, ?)').run(child.id, mode, stamp, 'pending');
 
   const time = when.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila' });
   const what = timeIn ? 'timed in at school' : 'timed out and is heading home';
@@ -210,15 +168,12 @@ app.post('/api/scan', auth(['admin']), async (req, res) => {
   const body = `Hi ${child.parent_name}, ${child.name} has ${what} at ${time}.`;
   const html = mailHtml(esc(subject), `<p>${esc(body)}</p><p style="color:#64748b;font-size:13px">Student ID: ${esc(child.student_code)}</p>`);
 
-  // Notify both channels: Gmail and SMS (to the contact number on the child record)
-  const [emailStatus, smsStatus] = await Promise.all([
-    sendEmail(child.parent_email, subject, body, 'scan', html),
-    sendSms(child.phone, `KidsCare: ${child.name} has ${what} at ${time}.`, 'scan')
-  ]);
-  db.prepare('UPDATE scans SET email_status = ?, sms_status = ? WHERE id = ?').run(emailStatus, smsStatus, scan.lastInsertRowid);
+  // Notify the parent by email only
+  const emailStatus = await sendEmail(child.parent_email, subject, body, 'scan', html);
+  db.prepare('UPDATE scans SET email_status = ? WHERE id = ?').run(emailStatus, scan.lastInsertRowid);
 
   io.to(`parent:${child.parent_id}`).to('staff').emit('status', { childId: child.id, status });
-  res.json({ child: child.name, status, mode, emailedTo: child.parent_email, emailStatus, smsStatus, subject, body });
+  res.json({ child: child.name, status, mode, emailedTo: child.parent_email, emailStatus, subject, body });
 });
 
 app.get('/api/scans', auth(['admin']), (req, res) => {
@@ -229,6 +184,25 @@ app.get('/api/scans', auth(['admin']), (req, res) => {
 
 app.get('/api/parents', auth(['admin']), (req, res) => {
   res.json(db.prepare("SELECT id, name, email FROM users WHERE role = 'parent' ORDER BY name").all());
+});
+
+// Admin-only: send a test email to confirm the deployment's email setup works.
+app.post('/api/test-email', auth(['admin']), async (req, res) => {
+  const me = db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
+  const to = String(req.body.to || (me && me.email) || '').trim();
+  if (!to) return res.status(400).json({ error: 'Walang email address' });
+  try {
+    await sendMail({
+      to,
+      subject: 'KidsCare email test',
+      text: 'Kung nababasa mo ito, gumagana ang email sending ng KidsCare sa Render.',
+      html: mailHtml('Email test', '<p>Kung nababasa mo ito, <strong>gumagana</strong> ang email sending ng KidsCare sa Render.</p>')
+    });
+    res.json({ ok: true, to });
+  } catch (e) {
+    console.error('Test email failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ---------- Activities & Announcements (photos + optional email blast) ----------
@@ -250,7 +224,7 @@ function targetChildren(type, value) {
 
 // Runs in the background so the admin does not wait; progress is stored on the activity row.
 async function emailParents(activityId, a, parentIds) {
-  const parents = db.prepare(`SELECT u.name, u.email, (SELECT phone FROM children WHERE parent_id = u.id LIMIT 1) AS phone
+  const parents = db.prepare(`SELECT u.name, u.email
     FROM users u WHERE u.id IN (${parentIds.map(() => '?').join(',')})`).all(...parentIds);
   const link = process.env.PUBLIC_URL ? `<p><a href="${esc(process.env.PUBLIC_URL)}">Open KidsCare</a></p>` : '';
   for (const p of parents) {
@@ -260,7 +234,6 @@ async function emailParents(activityId, a, parentIds) {
     const html = mailHtml(esc(a.title), `<p>Hi ${esc(p.name)},</p><p>${esc(msg).replace(/\n/g, '<br>')}</p>${link}`);
     const st = await sendEmail(p.email, subject, text, 'activity', html);
     db.prepare(`UPDATE activities SET ${st === 'sent' ? 'emails_sent = emails_sent + 1' : 'emails_failed = emails_failed + 1'} WHERE id = ?`).run(activityId);
-    await sendSms(p.phone, `KidsCare: ${a.title}${a.message ? ' - ' + a.message.slice(0, 100) : ''}`, 'activity');
   }
 }
 
@@ -444,10 +417,6 @@ async function notifyMonthly(month, r) {
     });
     const body = `Hi ${p.name},\n\nHere is your child's attendance for ${label}:\n\n${lines.join('\n')}\n\nThank you for being part of our daycare family.`;
     await sendEmail(p.email, `Attendance summary for ${label}`, body, 'report', mailHtml(esc(`Attendance summary: ${label}`), `<p>${esc(body).replace(/\n/g, '<br>')}</p>`));
-    if (process.env.MONTHLY_SMS === 'on') {
-      const ph = db.prepare('SELECT phone FROM children WHERE parent_id = ? LIMIT 1').get(pid);
-      await sendSms(ph && ph.phone, `KidsCare ${label}: ` + kids.map(c => `${c.name} ${c.present}/${r.schoolDays} days`).join(', '), 'report');
-    }
   }
 }
 
@@ -592,4 +561,10 @@ io.on('connection', socket => {
 
 // ---------- Start ----------
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`KidsCare running at http://localhost:${PORT}`));
+if (process.env.RENDER && emailProvider !== 'brevo') {
+  console.warn('WARNING: Render blocks SMTP ports 465/587. Set BREVO_API_KEY and MAIL_FROM to send email on Render.');
+}
+if (process.env.RENDER && !process.env.DATA_DIR) {
+  console.warn('WARNING: SQLite data is ephemeral on Render. Set DATA_DIR to a persistent disk mount to keep the database.');
+}
+server.listen(PORT, () => console.log(`KidsCare running at http://localhost:${PORT} (email: ${emailProvider})`));
