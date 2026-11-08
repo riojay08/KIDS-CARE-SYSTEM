@@ -1,5 +1,5 @@
 // ============================================================
-// KidsCare server.js (Fully Fixed & Production Ready)
+// KidsCare server.js  (kumpletong file, i-save sa root ng project)
 // ============================================================
 require('dotenv').config();
 const fs = require('fs');
@@ -12,29 +12,33 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
-const { OAuth2Client } = require('google-auth-library');
 const db = require('./db');
 
-fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
+const UPLOAD_DIR = path.join(process.env.DATA_DIR || __dirname, 'uploads');   // same disk as the database
+
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 app.use(express.json());
+app.get('/healthz', (req, res) => res.send('ok'));   // used by hosting health checks
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(UPLOAD_DIR));
 
 // ---------- Helpers ----------
 const signToken = u =>
   jwt.sign({ id: u.id, role: u.role, name: u.name }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
+// Middleware: tinitingnan kung naka-login (at kung tama ang role)
 function auth(roles) {
   return (req, res, next) => {
     try {
       const token = (req.headers.authorization || '').replace('Bearer ', '');
       req.user = jwt.verify(token, process.env.JWT_SECRET);
+      // Deleted accounts can no longer use an old token
+      if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(req.user.id)) return res.status(401).json({ error: 'Account not found' });
       if (roles && !roles.includes(req.user.role)) return res.status(403).json({ error: 'Hindi allowed' });
       next();
     } catch {
@@ -43,15 +47,26 @@ function auth(roles) {
   };
 }
 
+// Admin: lahat ng bata. Parent: sariling anak lang.
+function canAccessChild(user, childId) {
+  if (user.role === 'admin') return true;
+  return !!db.prepare('SELECT 1 FROM children WHERE id = ? AND parent_id = ?').get(childId, user.id);
+}
+
 const toChild = c => ({ ...c, allergies: JSON.parse(c.allergies || '[]') });
 
 const mailer = nodemailer.createTransport({
   service: 'gmail',
-  auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+  auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
+  // fail fast instead of hanging if the host blocks SMTP
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000
 });
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Simple branded HTML wrapper for all emails
 const mailHtml = (title, bodyHtml) => `
 <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
   <div style="background:#0891b2;color:#fff;padding:14px 18px;font-weight:bold">KidsCare</div>
@@ -59,20 +74,75 @@ const mailHtml = (title, bodyHtml) => `
   <div style="padding:10px 18px;font-size:12px;color:#64748b">Automated message from KidsCare. Please do not reply to this email.</div>
 </div>`;
 
+// Email: on failure the message goes to the outbox and is retried automatically
 async function sendEmail(to, subject, text, kind = 'general', html) {
   let status = 'sent', error = null;
   try {
     await mailer.sendMail({ from: `KidsCare <${process.env.GMAIL_USER}>`, to, subject, text, html });
   } catch (e) {
-    status = 'failed';
+    status = 'queued';
     error = e.message;
-    console.error('Email failed:', e.message);
+    console.error('Email queued for retry:', e.message);
+    db.prepare('INSERT INTO outbox (channel, to_addr, subject, body, html) VALUES (?, ?, ?, ?, ?)').run('email', to, subject, text, html || null);
   }
-  db.prepare('INSERT INTO email_log (to_email, subject, kind, status, error) VALUES (?, ?, ?, ?, ?)').run(to, subject, kind, status, error);
+  db.prepare('INSERT INTO email_log (to_email, subject, kind, status, error, channel) VALUES (?, ?, ?, ?, ?, ?)').run(to, subject, kind, status, error, 'email');
   return status;
 }
 
-// ---------- Routes ----------
+// SMS gateway: SMS_PROVIDER = semaphore | twilio | none
+const SMS = (process.env.SMS_PROVIDER || 'none').toLowerCase();
+function smsNumber(n) {
+  const d = String(n || '').replace(/\D/g, '');
+  if (d.length < 10) return null;
+  const local = d.startsWith('63') ? '0' + d.slice(2) : (d.length === 10 && d.startsWith('9') ? '0' + d : d);
+  return SMS === 'twilio' ? '+63' + local.slice(1) : local;   // Semaphore: 09XXXXXXXXX, Twilio: +639XXXXXXXXX
+}
+async function rawSms(to, text) {
+  if (SMS === 'semaphore') {
+    const body = new URLSearchParams({ apikey: process.env.SEMAPHORE_API_KEY || '', number: to, message: text });
+    if (process.env.SEMAPHORE_SENDER) body.set('sendername', process.env.SEMAPHORE_SENDER);
+    const r = await fetch('https://api.semaphore.co/api/v4/messages', { method: 'POST', body });
+    if (!r.ok) throw new Error('Semaphore ' + r.status + ' ' + (await r.text()).slice(0, 120));
+  } else if (SMS === 'twilio') {
+    const sid = process.env.TWILIO_ACCOUNT_SID, tok = process.env.TWILIO_AUTH_TOKEN;
+    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+      method: 'POST',
+      headers: { Authorization: 'Basic ' + Buffer.from(`${sid}:${tok}`).toString('base64') },
+      body: new URLSearchParams({ To: to, From: process.env.TWILIO_FROM || '', Body: text })
+    });
+    if (!r.ok) throw new Error('Twilio ' + r.status + ' ' + (await r.text()).slice(0, 120));
+  } else throw new Error('SMS is not configured');
+}
+// Returns 'sent', 'queued' (will retry) or 'skipped' (no provider or no valid number)
+async function sendSms(number, text, kind = 'general') {
+  const to = SMS === 'none' ? null : smsNumber(number);
+  if (!to) return 'skipped';
+  let status = 'sent', error = null;
+  try { await rawSms(to, text); }
+  catch (e) {
+    status = 'queued'; error = e.message;
+    db.prepare('INSERT INTO outbox (channel, to_addr, body) VALUES (?, ?, ?)').run('sms', to, text);
+  }
+  db.prepare('INSERT INTO email_log (to_email, subject, kind, status, error, channel) VALUES (?, ?, ?, ?, ?, ?)').run(to, text.slice(0, 60), kind, status, error, 'sms');
+  return status;
+}
+
+// Retry failed notifications every 2 minutes, up to 5 attempts each
+async function retryOutbox() {
+  const rows = db.prepare("SELECT * FROM outbox WHERE status = 'pending' AND attempts < 5 ORDER BY id LIMIT 20").all();
+  for (const r of rows) {
+    try {
+      if (r.channel === 'sms') await rawSms(r.to_addr, r.body);
+      else await mailer.sendMail({ from: `KidsCare <${process.env.GMAIL_USER}>`, to: r.to_addr, subject: r.subject, text: r.body, html: r.html || undefined });
+      db.prepare("UPDATE outbox SET status = 'sent' WHERE id = ?").run(r.id);
+    } catch (e) {
+      db.prepare("UPDATE outbox SET attempts = attempts + 1, status = CASE WHEN attempts + 1 >= 5 THEN 'failed' ELSE 'pending' END WHERE id = ?").run(r.id);
+    }
+  }
+}
+setInterval(retryOutbox, 2 * 60 * 1000);
+
+// ---------- Sign-up at login ----------
 app.post('/api/signup', (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !email.includes('@') || !password || password.length < 6)
@@ -95,29 +165,7 @@ app.post('/api/login', (req, res) => {
   res.json({ token: signToken(u), user: { id: u.id, role: u.role, name: u.name } });
 });
 
-app.get('/api/config', (req, res) => res.json({ googleClientId: process.env.GOOGLE_CLIENT_ID || '' }));
-
-app.post('/api/google', async (req, res) => {
-  try {
-    const ticket = await googleClient.verifyIdToken({
-      idToken: req.body.credential,
-      audience: process.env.GOOGLE_CLIENT_ID
-    });
-    const p = ticket.getPayload();
-    if (!p.email_verified) return res.status(401).json({ error: 'Hindi verified ang Google email' });
-    const em = p.email.toLowerCase();
-    let u = db.prepare('SELECT * FROM users WHERE email = ?').get(em);
-    if (!u) {
-      const info = db.prepare('INSERT INTO users (role, name, email) VALUES (?, ?, ?)').run('parent', p.name || em, em);
-      u = { id: info.lastInsertRowid, role: 'parent', name: p.name || em };
-    }
-    if (u.role !== 'parent') return res.status(403).json({ error: 'Para sa parents lang ang Google login' });
-    res.json({ token: signToken(u), user: { id: u.id, role: u.role, name: u.name } });
-  } catch {
-    res.status(401).json({ error: 'Hindi ma-verify ang Google login' });
-  }
-});
-
+// ---------- Mga bata at QR scan ----------
 app.get('/api/children', auth(), (req, res) => {
   const rows = req.user.role === 'admin'
     ? db.prepare('SELECT c.*, u.name AS parent_name, u.email AS parent_email FROM children c JOIN users u ON u.id = c.parent_id ORDER BY c.name').all()
@@ -127,14 +175,14 @@ app.get('/api/children', auth(), (req, res) => {
 
 app.post('/api/children', auth(['parent']), (req, res) => {
   const { name, address, age, dob, phone, allergies, classroom, medical_notes, emergency_name, emergency_phone } = req.body;
-  if (!name || !address || !dob || !phone || !classroom || !emergency_name || !emergency_phone)
+  if (!name || !address || !dob || !phone)
     return res.status(400).json({ error: 'Kumpletuhin ang form' });
   const token = crypto.randomBytes(16).toString('hex');
   const info = db.prepare(`INSERT INTO children
       (parent_id, name, address, age, dob, phone, allergies, qr_token, classroom, medical_notes, emergency_name, emergency_phone)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(req.user.id, name.trim(), address.trim(), Number(age) || 0, dob, phone.trim(), JSON.stringify(allergies || []), token,
-      String(classroom).trim(), String(medical_notes || '').trim(), String(emergency_name).trim(), String(emergency_phone).trim());
+      '', String(medical_notes || '').trim(), '', '');
   db.prepare('UPDATE children SET student_code = ? WHERE id = ?')
     .run(`KC-${new Date().getFullYear()}-${String(info.lastInsertRowid).padStart(4, '0')}`, info.lastInsertRowid);
   res.json(toChild(db.prepare('SELECT * FROM children WHERE id = ?').get(info.lastInsertRowid)));
@@ -145,21 +193,32 @@ app.post('/api/scan', auth(['admin']), async (req, res) => {
   const child = db.prepare('SELECT c.*, u.name AS parent_name, u.email AS parent_email FROM children c JOIN users u ON u.id = c.parent_id WHERE c.qr_token = ?').get(token);
   if (!child) return res.status(404).json({ error: 'Hindi kilalang QR code' });
 
-  const arriving = child.status !== 'at_school';
-  const status = arriving ? 'at_school' : 'home';
-  db.prepare('UPDATE children SET status = ? WHERE id = ?').run(status, child.id);
-  const scan = db.prepare('INSERT INTO scans (child_id, type, email_status) VALUES (?, ?, ?)').run(child.id, arriving ? 'arrival' : 'departure', 'pending');
+  const mode = req.body.mode === 'departure' ? 'departure' : 'arrival';   // arrival = Time In, departure = Time Out
+  const timeIn = mode === 'arrival';
+  // Scans made offline keep their original time (max 7 days old, never in the future)
+  let when = new Date(req.body.scannedAt);
+  if (isNaN(when) || when > Date.now() || Date.now() - when > 7 * 864e5) when = new Date();
+  const stamp = when.toISOString().slice(0, 19).replace('T', ' ');
+  const status = timeIn ? 'at_school' : 'home';
 
-  const time = new Date().toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila' });
-  const subject = arriving ? `${child.name} arrived safely at school` : `${child.name} is safely headed home`;
-  const body = `Hi ${child.parent_name}, ${child.name} ${arriving ? 'has safely arrived at school' : 'has left school and is safely headed home'} at ${time}.`;
+  db.prepare('UPDATE children SET status = ? WHERE id = ?').run(status, child.id);
+  const scan = db.prepare('INSERT INTO scans (child_id, type, created_at, email_status, sms_status) VALUES (?, ?, ?, ?, ?)').run(child.id, mode, stamp, 'pending', 'pending');
+
+  const time = when.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Manila' });
+  const what = timeIn ? 'timed in at school' : 'timed out and is heading home';
+  const subject = timeIn ? `${child.name} timed in at school` : `${child.name} timed out of school`;
+  const body = `Hi ${child.parent_name}, ${child.name} has ${what} at ${time}.`;
   const html = mailHtml(esc(subject), `<p>${esc(body)}</p><p style="color:#64748b;font-size:13px">Student ID: ${esc(child.student_code)}</p>`);
 
-  const emailStatus = await sendEmail(child.parent_email, subject, body, 'scan', html);
-  db.prepare('UPDATE scans SET email_status = ? WHERE id = ?').run(emailStatus, scan.lastInsertRowid);
+  // Notify both channels: Gmail and SMS (to the contact number on the child record)
+  const [emailStatus, smsStatus] = await Promise.all([
+    sendEmail(child.parent_email, subject, body, 'scan', html),
+    sendSms(child.phone, `KidsCare: ${child.name} has ${what} at ${time}.`, 'scan')
+  ]);
+  db.prepare('UPDATE scans SET email_status = ?, sms_status = ? WHERE id = ?').run(emailStatus, smsStatus, scan.lastInsertRowid);
 
   io.to(`parent:${child.parent_id}`).to('staff').emit('status', { childId: child.id, status });
-  res.json({ child: child.name, status, emailedTo: child.parent_email, emailStatus, subject, body });
+  res.json({ child: child.name, status, mode, emailedTo: child.parent_email, emailStatus, smsStatus, subject, body });
 });
 
 app.get('/api/scans', auth(['admin']), (req, res) => {
@@ -172,31 +231,36 @@ app.get('/api/parents', auth(['admin']), (req, res) => {
   res.json(db.prepare("SELECT id, name, email FROM users WHERE role = 'parent' ORDER BY name").all());
 });
 
+// ---------- Activities & Announcements (photos + optional email blast) ----------
 const upload = multer({
   storage: multer.diskStorage({
-    destination: path.join(__dirname, 'uploads'),
+    destination: UPLOAD_DIR,
     filename: (req, file, cb) => cb(null, crypto.randomBytes(12).toString('hex') + path.extname(file.originalname).toLowerCase())
   }),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => cb(null, ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype))
 });
 
+// Which students does a post target?
 function targetChildren(type, value) {
   if (type === 'child') return db.prepare('SELECT * FROM children WHERE id = ?').all(value);
   if (type === 'classroom') return db.prepare('SELECT * FROM children WHERE classroom = ?').all(value);
   return db.prepare('SELECT * FROM children').all();
 }
 
+// Runs in the background so the admin does not wait; progress is stored on the activity row.
 async function emailParents(activityId, a, parentIds) {
-  const parents = db.prepare(`SELECT name, email FROM users WHERE id IN (${parentIds.map(() => '?').join(',')})`).all(...parentIds);
+  const parents = db.prepare(`SELECT u.name, u.email, (SELECT phone FROM children WHERE parent_id = u.id LIMIT 1) AS phone
+    FROM users u WHERE u.id IN (${parentIds.map(() => '?').join(',')})`).all(...parentIds);
   const link = process.env.PUBLIC_URL ? `<p><a href="${esc(process.env.PUBLIC_URL)}">Open KidsCare</a></p>` : '';
   for (const p of parents) {
-    const subject = `${a.kind === 'announcement' ? '📢' : '🎨'} ${a.title}`;
+    const subject = `${a.kind === 'announcement' ? 'Announcement' : 'Activity'}: ${a.title}`;
     const msg = a.message || 'There is a new update from school.';
     const text = `Hi ${p.name},\n\n${msg}\n\nOpen KidsCare to see the photos and details.`;
     const html = mailHtml(esc(a.title), `<p>Hi ${esc(p.name)},</p><p>${esc(msg).replace(/\n/g, '<br>')}</p>${link}`);
     const st = await sendEmail(p.email, subject, text, 'activity', html);
     db.prepare(`UPDATE activities SET ${st === 'sent' ? 'emails_sent = emails_sent + 1' : 'emails_failed = emails_failed + 1'} WHERE id = ?`).run(activityId);
+    await sendSms(p.phone, `KidsCare: ${a.title}${a.message ? ' - ' + a.message.slice(0, 100) : ''}`, 'activity');
   }
 }
 
@@ -204,7 +268,7 @@ app.post('/api/activities', auth(['admin']), upload.array('photos', 5), (req, re
   const kind = req.body.kind === 'announcement' ? 'announcement' : 'activity';
   const title = String(req.body.title || '').trim().slice(0, 120);
   const message = String(req.body.message || '').trim().slice(0, 2000);
-  const type = ['all', 'classroom', 'child'].includes(req.body.targetType) ? req.body.targetType : 'all';
+  const type = ['all', 'child'].includes(req.body.targetType) ? req.body.targetType : 'all';
   const value = type === 'all' ? null : String(req.body.targetValue || '');
   if (!title) return res.status(400).json({ error: 'Lagyan ng title' });
 
@@ -227,17 +291,20 @@ app.get('/api/activities', auth(['admin']), (req, res) => {
     FROM activities a ORDER BY a.id DESC LIMIT 15`).all());
 });
 
+// Parent feed: only posts that target this parent's children
 app.get('/api/feed', auth(['parent']), (req, res) => {
   const me = req.user.id;
   const rows = db.prepare(`SELECT a.* FROM activities a
-    WHERE (a.target_type = 'all' AND EXISTS (SELECT 1 FROM children WHERE parent_id = ?))
-       OR (a.target_type = 'classroom' AND a.target_value IN (SELECT classroom FROM children WHERE parent_id = ?))
-       OR (a.target_type = 'child' AND a.target_value IN (SELECT CAST(id AS TEXT) FROM children WHERE parent_id = ?))
-    ORDER BY a.id DESC LIMIT 50`).all(me, me, me);
+    WHERE a.id NOT IN (SELECT activity_id FROM activity_hidden WHERE parent_id = ?)
+      AND ((a.target_type = 'all' AND EXISTS (SELECT 1 FROM children WHERE parent_id = ?))
+        OR (a.target_type = 'classroom' AND a.target_value IN (SELECT classroom FROM children WHERE parent_id = ?))
+        OR (a.target_type = 'child' AND a.target_value IN (SELECT CAST(id AS TEXT) FROM children WHERE parent_id = ?)))
+    ORDER BY a.id DESC LIMIT 50`).all(me, me, me, me);
   const ph = db.prepare('SELECT file FROM activity_photos WHERE activity_id = ?');
   res.json(rows.map(a => ({ id: a.id, kind: a.kind, title: a.title, body: a.body, created_at: a.created_at, photos: ph.all(a.id).map(p => '/uploads/' + p.file) })));
 });
 
+// ---------- Parent <-> Teacher/Admin chat (one thread per parent) ----------
 const CHAT_SQL = `SELECT m.id, m.parent_id, m.text, m.created_at, u.name AS sender_name, u.role AS sender_role
   FROM chat_messages m JOIN users u ON u.id = m.sender_id`;
 const getThread = pid => db.prepare(CHAT_SQL + ' WHERE m.parent_id = ? ORDER BY m.id').all(pid);
@@ -248,15 +315,232 @@ function postChat(req, res, pid) {
   if (!db.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'parent'").get(pid)) return res.status(404).json({ error: 'Parent not found' });
   const info = db.prepare('INSERT INTO chat_messages (parent_id, sender_id, text) VALUES (?, ?, ?)').run(pid, req.user.id, text);
   const msg = db.prepare(CHAT_SQL + ' WHERE m.id = ?').get(info.lastInsertRowid);
-  io.to(`parent:${pid}`).to('staff').emit('message', msg);
+  io.to(`parent:${pid}`).to('staff').emit('message', msg);   // parent room + all staff
   res.json(msg);
 }
-
+// Parents can only reach their own thread; only admins can open any thread.
 app.get('/api/chat', auth(['parent']), (req, res) => res.json(getThread(req.user.id)));
 app.post('/api/chat', auth(['parent']), (req, res) => postChat(req, res, req.user.id));
 app.get('/api/chat/:pid', auth(['admin']), (req, res) => res.json(getThread(Number(req.params.pid))));
 app.post('/api/chat/:pid', auth(['admin']), (req, res) => postChat(req, res, Number(req.params.pid)));
 
+// ---------- Monthly attendance report (daycare) ----------
+const SCHOOL_START = process.env.SCHOOL_START || '08:30';   // Time In after this = late arrival
+const SCHOOL_END = process.env.SCHOOL_END || '16:00';       // Time Out before this = early pickup
+const CLOSING = process.env.CLOSING_TIME || '17:00';        // Time Out after this = late pickup
+const FREQUENT = 3;                                         // 3 or more days = "frequent"
+const manila = d => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(d).map(x => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
+};
+const validMonth = m => /^\d{4}-\d{2}$/.test(m || '') ? m : manila(new Date()).date.slice(0, 7);
+const minutes = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+
+function buildReport(month, withPrev = true) {
+  const today = manila(new Date()).date;
+  const [Y, M] = month.split('-').map(Number);
+
+  // School days = Monday to Friday of that month, up to today
+  const days = [];
+  for (let d = 1; d <= new Date(Date.UTC(Y, M, 0)).getUTCDate(); d++) {
+    const iso = `${month}-${String(d).padStart(2, '0')}`;
+    const wd = new Date(Date.UTC(Y, M - 1, d)).getUTCDay();
+    if (wd !== 0 && wd !== 6 && iso <= today) days.push(iso);
+  }
+
+  const kids = db.prepare('SELECT id, parent_id, name, student_code FROM children ORDER BY name').all();
+  const scans = db.prepare(`SELECT child_id, type, created_at FROM scans
+    WHERE created_at >= datetime(?, '-1 day') AND created_at < datetime(?, '+1 month', '+1 day') ORDER BY id`).all(`${month}-01 00:00:00`, `${month}-01 00:00:00`);
+
+  const per = {};   // child -> date -> { in: earliest Time In, out: latest Time Out }
+  for (const s of scans) {
+    const m = manila(new Date(s.created_at.replace(' ', 'T') + 'Z'));
+    if (!days.includes(m.date)) continue;
+    const e = ((per[s.child_id] ||= {})[m.date] ||= {});
+    if (s.type === 'arrival') { if (!e.in || m.time < e.in) e.in = m.time; }
+    else if (!e.out || m.time > e.out) e.out = m.time;
+  }
+
+  const children = kids.map(k => {
+    const byDay = per[k.id] || {};
+    const d = Object.values(byDay);
+    let run = 0, longest = 0;
+    for (const day of days) { if (byDay[day]) run = 0; else longest = Math.max(longest, ++run); }
+    const stays = d.filter(e => e.in && e.out && e.out > e.in).map(e => (minutes(e.out) - minutes(e.in)) / 60);
+    return {
+      id: k.id, parentId: k.parent_id, name: k.name, code: k.student_code,
+      present: d.length,
+      absent: Math.max(days.length - d.length, 0),
+      maxAbsentStreak: longest,
+      late: d.filter(e => e.in && e.in > SCHOOL_START).length,
+      early: d.filter(e => e.out && e.out < SCHOOL_END).length,
+      latePickup: d.filter(e => e.out && e.out > CLOSING).length,
+      missingOut: Object.entries(byDay).filter(([day, e]) => e.in && !e.out && day < today).length,
+      avgStay: stays.length ? Math.round(stays.reduce((a, b) => a + b, 0) / stays.length * 10) / 10 : null,
+      rate: days.length ? Math.round(d.length / days.length * 100) : 0
+    };
+  });
+  const sum = f => children.reduce((a, c) => a + f(c), 0);
+  const report = {
+    month, schoolDays: days.length, rules: { start: SCHOOL_START, end: SCHOOL_END, closing: CLOSING, frequent: FREQUENT },
+    summary: {
+      students: kids.length,
+      avgRate: kids.length ? Math.round(sum(c => c.rate) / kids.length) : 0,
+      prevAvgRate: null,
+      perfect: children.filter(c => days.length && c.present === days.length).length,
+      timeIns: sum(c => c.present), lates: sum(c => c.late), early: sum(c => c.early),
+      latePickups: sum(c => c.latePickup), absences: sum(c => c.absent)
+    },
+    perfect: children.filter(c => days.length && c.present === days.length),                       // always present
+    lates: children.filter(c => c.late >= FREQUENT).sort((a, b) => b.late - a.late),
+    early: children.filter(c => c.early >= FREQUENT).sort((a, b) => b.early - a.early),
+    absent: children.filter(c => c.absent >= FREQUENT).sort((a, b) => b.absent - a.absent),        // needs follow-up
+    latePickups: children.filter(c => c.latePickup >= 2).sort((a, b) => b.latePickup - a.latePickup),
+    missingOut: children.filter(c => c.missingOut > 0),
+    children,
+    daily: days.map(date => ({ date, present: kids.filter(k => per[k.id] && per[k.id][date]).length }))
+  };
+  if (withPrev) {   // compare with the month before
+    const prev = buildReport(new Date(Date.UTC(Y, M - 2, 1)).toISOString().slice(0, 7), false);
+    if (prev.summary.timeIns > 0) report.summary.prevAvgRate = prev.summary.avgRate;
+  }
+  return report;
+}
+
+app.get('/api/report', auth(['admin']), (req, res) => res.json(buildReport(validMonth(req.query.month))));
+app.get('/api/reports', auth(['admin']), (req, res) =>
+  res.json(db.prepare('SELECT month, notified, created_at FROM monthly_reports ORDER BY month DESC LIMIT 12').all()));
+// Parents only see their own children
+app.get('/api/attendance', auth(['parent']), (req, res) => {
+  const r = buildReport(validMonth(req.query.month), false);
+  res.json({ month: r.month, schoolDays: r.schoolDays, rules: r.rules, children: r.children.filter(c => c.parentId === req.user.id) });
+});
+
+// ---------- Automatic monthly report ----------
+const monthLabel = m => { const [Y, M] = m.split('-').map(Number); return new Date(Date.UTC(Y, M - 1, 1)).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }); };
+const prevMonth = () => { const [Y, M] = manila(new Date()).date.slice(0, 7).split('-').map(Number); return new Date(Date.UTC(Y, M - 2, 1)).toISOString().slice(0, 7); };
+
+// Emails the report to every admin and (unless PARENT_MONTHLY_SUMMARY=off) a short summary to each parent
+async function notifyMonthly(month, r) {
+  const label = monthLabel(month), names = a => a.map(c => c.name).join(', ') || 'none';
+  const subject = `Monthly attendance report: ${label}`;
+  const text = `KidsCare monthly attendance report for ${label}\n\nSchool days: ${r.schoolDays}\nAverage attendance: ${r.summary.avgRate}%\n\nAlways present: ${names(r.perfect)}\nFrequent lates: ${names(r.lates)}\nFrequent early pickups: ${names(r.early)}\nNeeds follow-up (absences): ${names(r.absent)}\nLate pickups: ${names(r.latePickups)}\nMissing Time Out scan: ${names(r.missingOut)}\n\nOpen KidsCare > Reports for the full report and the PDF.`;
+  for (const a of db.prepare("SELECT email FROM users WHERE role = 'admin'").all())
+    await sendEmail(a.email, subject, text, 'report', mailHtml(esc(subject), `<p>${esc(text).replace(/\n/g, '<br>')}</p>`));
+
+  if ((process.env.PARENT_MONTHLY_SUMMARY || 'on') === 'off') return;
+  const byParent = {};
+  r.children.forEach(c => (byParent[c.parentId] ||= []).push(c));
+  for (const [pid, kids] of Object.entries(byParent)) {
+    const p = db.prepare('SELECT name, email FROM users WHERE id = ?').get(pid);
+    if (!p) continue;
+    const lines = kids.map(c => {
+      const parts = [`attended ${c.present} of ${r.schoolDays} school days (${c.rate}%)`];
+      if (r.schoolDays && c.present === r.schoolDays) parts.push('perfect attendance, well done');
+      if (c.late) parts.push(`${c.late} late arrival(s)`);
+      if (c.early) parts.push(`${c.early} early pickup(s)`);
+      if (c.avgStay) parts.push(`stayed about ${c.avgStay} hours a day`);
+      return `${c.name}: ${parts.join('; ')}.`;
+    });
+    const body = `Hi ${p.name},\n\nHere is your child's attendance for ${label}:\n\n${lines.join('\n')}\n\nThank you for being part of our daycare family.`;
+    await sendEmail(p.email, `Attendance summary for ${label}`, body, 'report', mailHtml(esc(`Attendance summary: ${label}`), `<p>${esc(body).replace(/\n/g, '<br>')}</p>`));
+    if (process.env.MONTHLY_SMS === 'on') {
+      const ph = db.prepare('SELECT phone FROM children WHERE parent_id = ? LIMIT 1').get(pid);
+      await sendSms(ph && ph.phone, `KidsCare ${label}: ` + kids.map(c => `${c.name} ${c.present}/${r.schoolDays} days`).join(', '), 'report');
+    }
+  }
+}
+
+// Saves the report once per month and notifies. force = admin pressed "Send now".
+async function runMonthly(month, force = false) {
+  const r = buildReport(month);
+  const ins = db.prepare('INSERT OR IGNORE INTO monthly_reports (month, json) VALUES (?, ?)').run(month, JSON.stringify(r));
+  if (!ins.changes && !force) return false;                       // already done for that month
+  if (!ins.changes) db.prepare('UPDATE monthly_reports SET json = ?, created_at = CURRENT_TIMESTAMP WHERE month = ?').run(JSON.stringify(r), month);
+  if (!force && r.summary.timeIns === 0) return false;           // nothing happened that month: no emails
+  await notifyMonthly(month, r);
+  db.prepare('UPDATE monthly_reports SET notified = 1 WHERE month = ?').run(month);
+  return true;
+}
+app.post('/api/report/run', auth(['admin']), (req, res) => {
+  runMonthly(validMonth(req.body.month), true).catch(e => console.error('Monthly report failed:', e.message));
+  res.json({ ok: true });
+});
+// After 6:00 AM (Manila) on any day, make sure last month's report exists. Checked hourly and at start-up.
+function checkMonthly() {
+  if (process.env.MONTHLY_AUTO === 'off' || manila(new Date()).time < '06:00') return;
+  runMonthly(prevMonth()).catch(e => console.error('Monthly report failed:', e.message));
+}
+setTimeout(checkMonthly, 15000);
+setInterval(checkMonthly, 60 * 60 * 1000);
+
+// ---------- Delete actions ----------
+const rmFiles = files => files.forEach(f => fs.unlink(path.join(UPLOAD_DIR, f), () => {}));
+
+// Removes a student and everything attached to them (the old photos/messages tables are cleaned too)
+const deleteChild = db.transaction(id => {
+  db.prepare('DELETE FROM scans WHERE child_id = ?').run(id);
+  db.prepare('DELETE FROM messages WHERE child_id = ?').run(id);
+  db.prepare('DELETE FROM photos WHERE child_id = ?').run(id);
+  db.prepare('DELETE FROM children WHERE id = ?').run(id);
+});
+
+// Removes a parent, their children, chat thread and hidden-update records
+const deleteParent = db.transaction(pid => {
+  db.prepare('SELECT id FROM children WHERE parent_id = ?').all(pid).forEach(c => deleteChild(c.id));
+  db.prepare('DELETE FROM chat_messages WHERE parent_id = ? OR sender_id = ?').run(pid, pid);
+  db.prepare('DELETE FROM activity_hidden WHERE parent_id = ?').run(pid);
+  db.prepare('DELETE FROM messages WHERE sender_id = ?').run(pid);
+  db.prepare('DELETE FROM users WHERE id = ?').run(pid);
+});
+
+// Admin deletes a check-in. The student's status is recalculated from the remaining scans.
+app.delete('/api/scans/:id', auth(['admin']), (req, res) => {
+  const s = db.prepare('SELECT * FROM scans WHERE id = ?').get(req.params.id);
+  if (!s) return res.status(404).json({ error: 'Not found' });
+  db.prepare('DELETE FROM scans WHERE id = ?').run(s.id);
+  const last = db.prepare('SELECT type FROM scans WHERE child_id = ? ORDER BY id DESC LIMIT 1').get(s.child_id);
+  db.prepare('UPDATE children SET status = ? WHERE id = ?').run(last && last.type === 'arrival' ? 'at_school' : 'home', s.child_id);
+  io.emit('children-changed');
+  res.json({ ok: true });
+});
+
+// Admin deletes a post for everyone (photos included)
+app.delete('/api/activities/:id', auth(['admin']), (req, res) => {
+  const files = db.prepare('SELECT file FROM activity_photos WHERE activity_id = ?').all(req.params.id).map(r => r.file);
+  const info = db.prepare('DELETE FROM activities WHERE id = ?').run(req.params.id);
+  if (!info.changes) return res.status(404).json({ error: 'Not found' });
+  rmFiles(files);
+  io.emit('feed-changed');
+  res.json({ ok: true });
+});
+
+// A parent hides an update from their own feed (other parents still see it)
+app.delete('/api/feed/:id', auth(['parent']), (req, res) => {
+  const id = Number(req.params.id);
+  if (!db.prepare('SELECT 1 FROM activities WHERE id = ?').get(id)) return res.status(404).json({ error: 'Not found' });
+  db.prepare('INSERT OR IGNORE INTO activity_hidden (activity_id, parent_id) VALUES (?, ?)').run(id, req.user.id);
+  res.json({ ok: true });
+});
+
+// Admin can delete any student. A parent can delete only their own child.
+app.delete('/api/children/:id', auth(['admin', 'parent']), (req, res) => {
+  const c = db.prepare('SELECT * FROM children WHERE id = ?').get(req.params.id);
+  if (!c || (req.user.role === 'parent' && c.parent_id !== req.user.id)) return res.status(404).json({ error: 'Not found' });
+  deleteChild(c.id);
+  io.emit('children-changed');
+  res.json({ ok: true });
+});
+
+app.delete('/api/parents/:id', auth(['admin']), (req, res) => {
+  const p = db.prepare("SELECT id FROM users WHERE id = ? AND role = 'parent'").get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  deleteParent(p.id);
+  io.emit('children-changed');
+  res.json({ ok: true });
+});
+
+// ---------- Sockets ----------
 io.use((socket, next) => {
   try {
     socket.user = jwt.verify(socket.handshake.auth.token, process.env.JWT_SECRET);
@@ -265,25 +549,47 @@ io.use((socket, next) => {
     next(new Error('unauthorized'));
   }
 });
+const online = new Map();       // parent id -> number of open connections (for the Inbox online dot)
+const staffOnline = new Map();  // admin/teacher id -> { name, sockets } (for the parent "teacher online" dot)
+const staffSummary = () => ({
+  online: staffOnline.size > 0,
+  count: staffOnline.size,
+  names: [...staffOnline.values()].map(s => s.name)
+});
+
 io.on('connection', socket => {
-  socket.join(socket.user.role === 'admin' ? 'staff' : `parent:${socket.user.id}`);
+  const u = socket.user;
+  if (u.role === 'admin') {
+    socket.join('staff');
+    socket.emit('presence:list', [...online.keys()]);
+
+    // Track staff so parents can see that a teacher/admin is online
+    const entry = staffOnline.get(u.id) || { name: u.name, sockets: 0 };
+    entry.sockets += 1;
+    staffOnline.set(u.id, entry);
+    io.to('parents').emit('staff:presence', staffSummary());
+
+    socket.on('disconnect', () => {
+      const e = staffOnline.get(u.id);
+      if (!e) return;
+      e.sockets -= 1;
+      if (e.sockets <= 0) staffOnline.delete(u.id);
+      io.to('parents').emit('staff:presence', staffSummary());
+    });
+  } else {
+    socket.join(`parent:${u.id}`);
+    socket.join('parents');
+    socket.emit('staff:presence', staffSummary());   // show the current staff status right after login
+    online.set(u.id, (online.get(u.id) || 0) + 1);
+    io.to('staff').emit('presence', { id: u.id, online: true });
+    socket.on('disconnect', () => {
+      const n = (online.get(u.id) || 1) - 1;
+      if (n <= 0) { online.delete(u.id); io.to('staff').emit('presence', { id: u.id, online: false }); }
+      else online.set(u.id, n);
+    });
+  }
 });
 
-// Safe Express Fallback Middleware (Ginagamit sa halip na app.get('*'))
-app.use((req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
+// ---------- Start ----------
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`KidsCare running at port ${PORT}`));
-```[cite: 5]
-
----
-
-### Paano ito i-update at i-deploy:
-1. Palitan ang laman ng iyong `server.js` (o `server_2.js`) ng code sa itaas[cite: 5].
-2. I-run ang mga sumusunod sa iyong VS Code Terminal:
-   ```bash
-   git add .
-   git commit -m "Fix Express wildcard route error using middleware fallback"
-   git push origin main
+server.listen(PORT, () => console.log(`KidsCare running at http://localhost:${PORT}`));
