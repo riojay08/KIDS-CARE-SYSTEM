@@ -1,5 +1,5 @@
 // ============================================================
-// KidsCare db.js  (kumpletong file, i-save sa root ng project)
+// KidsCare db.js  (complete file, save to the project root)
 // ============================================================
 require('dotenv').config();
 const Database = require('better-sqlite3');
@@ -55,7 +55,7 @@ db.exec(`
   );
 `);
 
-// Gumawa ng unang admin kung wala pa
+// Create the first admin if it does not exist yet
 const adminEmail = (process.env.ADMIN_EMAIL || 'admin@school.com').toLowerCase();
 if (!db.prepare('SELECT 1 FROM users WHERE email = ?').get(adminEmail)) {
   db.prepare('INSERT INTO users (role, name, email, password_hash) VALUES (?, ?, ?, ?)')

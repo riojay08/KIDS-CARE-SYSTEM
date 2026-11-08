@@ -52,8 +52,8 @@ async function init() {
     try {
       // Try to fetch children to validate token & get user profile
       const children = await api.req('/children');
-      // Kung nakuha, kunin ang user info sa pamamagitan ng token payload o re-login trick, 
-      // Pero dahil walang /me route, pwede nating i-decode o i-store ang user info sa localStorage.
+      // If successful, get the user info from the token payload or a re-login trick.
+      // But since there is no /me route, we can decode it or store the user info in localStorage.
       currentUser = JSON.parse(localStorage.getItem('kc_user') || 'null');
       if (currentUser) {
         state.children = children;
@@ -138,7 +138,7 @@ function renderAuth() {
         <div class="mt-6 ${role === 'signup' ? 'hidden' : ''}">
           <div class="relative flex py-2 items-center">
             <div class="flex-grow border-t border-slate-200"></div>
-            <span class="flex-shrink mx-4 text-slate-400 text-sm">O kaya</span>
+            <span class="flex-shrink mx-4 text-slate-400 text-sm">Or</span>
             <div class="flex-grow border-t border-slate-200"></div>
           </div>
           <div id="googleButtonContainer" class="flex justify-center mt-4"></div>
@@ -241,37 +241,37 @@ function renderAdminDashboard() {
           <div>
             <label class="block text-sm font-medium mb-1">Scan QR Token / Enter Code</label>
             <div class="flex gap-2">
-              <input type="text" id="qrInput" placeholder="I-paste ang qr_token o i-scan..." class="flex-grow border rounded p-2 outline-none focus:ring-2 focus:ring-indigo-500">
+              <input type="text" id="qrInput" placeholder="Paste the qr_token or scan it..." class="flex-grow border rounded p-2 outline-none focus:ring-2 focus:ring-indigo-500">
               <button onclick="submitScan()" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Scan</button>
             </div>
           </div>
         </div>
         <hr class="my-6">
-        <h2 class="text-lg font-semibold mb-4 text-indigo-600">Mag-upload ng Larawan</h2>
+        <h2 class="text-lg font-semibold mb-4 text-indigo-600">Upload Photo</h2>
         <form onsubmit="handlePhotoUpload(event)" class="space-y-3">
           <div>
-            <label class="block text-sm font-medium mb-1">Pumili ng Bata</label>
+            <label class="block text-sm font-medium mb-1">Select Child</label>
             <select id="photoChildId" class="w-full border rounded p-2">
-              <option value="all">Lahat ng Bata (General)</option>
+              <option value="all">All Children (General)</option>
               ${state.children.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
             </select>
           </div>
           <div>
-            <label class="block text-sm font-medium mb-1">Larawan (JPG, PNG, WEBP, Max 5MB)</label>
+            <label class="block text-sm font-medium mb-1">Photo (JPG, PNG, WEBP, Max 5MB)</label>
             <input type="file" id="photoFile" accept="image/jpeg,image/png,image/webp" required class="w-full border rounded p-2 text-sm">
           </div>
           <div>
             <label class="block text-sm font-medium mb-1">Caption</label>
-            <input type="text" id="photoCaption" placeholder="Maikling kwento o caption..." class="w-full border rounded p-2">
+            <input type="text" id="photoCaption" placeholder="Short story or caption..." class="w-full border rounded p-2">
           </div>
           <button type="submit" class="w-full bg-emerald-600 text-white py-2 rounded hover:bg-emerald-700">Upload Photo</button>
         </form>
       </div>
 
       <div class="bg-white p-6 rounded-xl shadow-md flex flex-col">
-        <h2 class="text-lg font-semibold mb-4 text-indigo-600">Listahan ng mga Bata at Chat</h2>
+        <h2 class="text-lg font-semibold mb-4 text-indigo-600">Children List and Chat</h2>
         <div class="overflow-y-auto flex-grow space-y-3 max-h-[500px]">
-          ${state.children.length === 0 ? '<p class="text-slate-400 text-sm">Wala pang nakarehistrong bata.</p>' : ''}
+          ${state.children.length === 0 ? '<p class="text-slate-400 text-sm">No registered children yet.</p>' : ''}
           ${state.children.map(c => `
             <div class="border rounded-lg p-4 flex flex-col gap-2 bg-slate-50">
               <div class="flex justify-between items-start">
@@ -294,11 +294,11 @@ function renderAdminDashboard() {
 
 async function submitScan() {
   const tokenVal = $('#qrInput').value.trim();
-  if (!tokenVal) return toast('Ilagay ang QR token', 'bad');
+  if (!tokenVal) return toast('Enter the QR token', 'bad');
   try {
     const r = await api.req('/scan', { method: 'POST', body: { token: tokenVal } });
     mailToast({ to: r.emailedTo, subject: r.subject, body: r.body });
-    toast(`Scan Success: ${r.child} ay nasa status na ${r.status}`);
+    toast(`Scan success: ${r.child} is now ${r.status}`);
     $('#qrInput').value = '';
     refresh();
   } catch (err) {
@@ -309,7 +309,7 @@ async function submitScan() {
 async function handlePhotoUpload(e) {
   e.preventDefault();
   const fileInput = $('#photoFile');
-  if (!fileInput.files[0]) return toast('Pumili ng larawan', 'bad');
+  if (!fileInput.files[0]) return toast('Select a photo', 'bad');
 
   const fd = new FormData();
   fd.append('photo', fileInput.files[0]);
@@ -338,15 +338,15 @@ function renderParentDashboard() {
     <main class="flex-grow p-6 max-w-6xl mx-auto w-full grid grid-cols-1 md:grid-cols-2 gap-6">
       <div class="space-y-6">
         <div class="bg-white p-6 rounded-xl shadow-md">
-          <h2 class="text-lg font-semibold mb-4 text-indigo-600">Magdagdag ng Anak</h2>
+          <h2 class="text-lg font-semibold mb-4 text-indigo-600">Add Child</h2>
           <form onsubmit="handleAddChild(event)" class="space-y-3">
             <div>
-              <label class="block text-sm font-medium mb-1">Pangalan ng Bata</label>
+              <label class="block text-sm font-medium mb-1">Child's Name</label>
               <input type="text" id="cName" required class="w-full border rounded p-2">
             </div>
             <div class="grid grid-cols-2 gap-2">
               <div>
-                <label class="block text-sm font-medium mb-1">Edad</label>
+                <label class="block text-sm font-medium mb-1">Age</label>
                 <input type="number" id="cAge" class="w-full border rounded p-2">
               </div>
               <div>
@@ -362,14 +362,14 @@ function renderParentDashboard() {
               <label class="block text-sm font-medium mb-1">Phone Number</label>
               <input type="text" id="cPhone" required class="w-full border rounded p-2">
             </div>
-            <button type="submit" class="w-full bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700">Magrehistro ng Anak</button>
+            <button type="submit" class="w-full bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700">Register Child</button>
           </form>
         </div>
 
         <div class="bg-white p-6 rounded-xl shadow-md">
-          <h2 class="text-lg font-semibold mb-4 text-indigo-600">Mga Anak Mo</h2>
+          <h2 class="text-lg font-semibold mb-4 text-indigo-600">Your Children</h2>
           <div class="space-y-4">
-            ${state.children.length === 0 ? '<p class="text-slate-400 text-sm">Wala pang nakatalang anak.</p>' : ''}
+            ${state.children.length === 0 ? '<p class="text-slate-400 text-sm">No children registered yet.</p>' : ''}
             ${state.children.map(c => `
               <div class="border rounded-lg p-4 bg-slate-50 flex flex-col gap-3">
                 <div class="flex justify-between items-start">
@@ -377,10 +377,10 @@ function renderParentDashboard() {
                     <h3 class="font-bold text-slate-800">${c.name}</h3>
                     <p class="text-xs text-slate-500">Status: <span class="font-semibold ${c.status === 'at_school' ? 'text-emerald-600' : 'text-amber-600'}">${c.status || 'home'}</span></p>
                   </div>
-                  <button onclick="openChatModal(${c.id}, '${c.name}')" class="bg-indigo-600 text-white px-3 py-1 rounded text-xs font-semibold hover:bg-indigo-700">Chat sa Admin</button>
+                  <button onclick="openChatModal(${c.id}, '${c.name}')" class="bg-indigo-600 text-white px-3 py-1 rounded text-xs font-semibold hover:bg-indigo-700">Chat with Admin</button>
                 </div>
                 <div class="bg-white p-3 rounded border text-center">
-                  <p class="text-xs font-semibold text-slate-500 mb-1">QR Code Token (I-pakita sa School)</p>
+                  <p class="text-xs font-semibold text-slate-500 mb-1">QR Code Token (Show at School)</p>
                   <p class="font-mono text-sm bg-slate-100 p-1 rounded select-all">KIDSCARE:${c.qr_token}</p>
                 </div>
               </div>
@@ -392,12 +392,12 @@ function renderParentDashboard() {
       <div class="bg-white p-6 rounded-xl shadow-md flex flex-col">
         <h2 class="text-lg font-semibold mb-4 text-indigo-600">Photo Gallery</h2>
         <div class="overflow-y-auto flex-grow space-y-4 max-h-[600px]">
-          ${state.photos.length === 0 ? '<p class="text-slate-400 text-sm">Wala pang mga larawan.</p>' : ''}
+          ${state.photos.length === 0 ? '<p class="text-slate-400 text-sm">No photos yet.</p>' : ''}
           ${state.photos.map(p => `
             <div class="border rounded-lg overflow-hidden bg-slate-50">
               <img src="${p.url}" alt="Photo" class="w-full h-48 object-cover">
               <div class="p-3">
-                <p class="text-xs text-slate-600">${p.caption || 'Walang caption'}</p>
+                <p class="text-xs text-slate-600">${p.caption || 'No caption'}</p>
               </div>
             </div>
           `).join('')}
@@ -420,7 +420,7 @@ async function handleAddChild(e) {
   };
   try {
     await api.req('/children', { method: 'POST', body });
-    toast('Matagumpay na naidagdag ang bata!');
+    toast('Child added successfully!');
     e.target.reset();
     refresh();
   } catch (err) {
@@ -446,7 +446,7 @@ function renderChatModalWindow(childName) {
     <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <div class="bg-white w-full max-w-lg rounded-xl shadow-xl flex flex-col h-[500px]">
         <div class="p-4 border-b flex justify-between items-center bg-indigo-50 rounded-t-xl">
-          <h3 class="font-bold text-indigo-700">Chat tungkol kay ${childName}</h3>
+          <h3 class="font-bold text-indigo-700">Chat about ${childName}</h3>
           <button onclick="closeChatModal()" class="text-slate-500 hover:text-slate-700 font-bold px-2">✕</button>
         </div>
         <div id="chatMsgsList" class="flex-grow p-4 overflow-y-auto space-y-3 bg-slate-50">
@@ -460,8 +460,8 @@ function renderChatModalWindow(childName) {
           `).join('')}
         </div>
         <div class="p-3 border-t bg-white flex gap-2 rounded-b-xl">
-          <input type="text" id="ci" placeholder="I-type ang mensahe..." class="flex-grow border rounded p-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm" onkeydown="if(event.key==='Enter') sendMsg()">
-          <button onclick="sendMsg()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700">Ipadala</button>
+          <input type="text" id="ci" placeholder="Type a message..." class="flex-grow border rounded p-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm" onkeydown="if(event.key==='Enter') sendMsg()">
+          <button onclick="sendMsg()" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700">Send</button>
         </div>
       </div>
     </div>

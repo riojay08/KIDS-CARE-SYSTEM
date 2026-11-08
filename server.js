@@ -1,5 +1,5 @@
 // ============================================================
-// KidsCare server.js  (kumpletong file, i-save sa root ng project)
+// KidsCare server.js  (complete file, save to the project root)
 // ============================================================
 require('dotenv').config();
 const fs = require('fs');
@@ -31,7 +31,7 @@ app.use('/uploads', express.static(UPLOAD_DIR));
 const signToken = u =>
   jwt.sign({ id: u.id, role: u.role, name: u.name }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
-// Middleware: tinitingnan kung naka-login (at kung tama ang role)
+// Middleware: checks that the user is logged in (and has the right role)
 function auth(roles) {
   return (req, res, next) => {
     try {
@@ -39,15 +39,15 @@ function auth(roles) {
       req.user = jwt.verify(token, process.env.JWT_SECRET);
       // Deleted accounts can no longer use an old token
       if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(req.user.id)) return res.status(401).json({ error: 'Account not found' });
-      if (roles && !roles.includes(req.user.role)) return res.status(403).json({ error: 'Hindi allowed' });
+      if (roles && !roles.includes(req.user.role)) return res.status(403).json({ error: 'Not allowed' });
       next();
     } catch {
-      res.status(401).json({ error: 'Mag-login muna' });
+      res.status(401).json({ error: 'Please log in first' });
     }
   };
 }
 
-// Admin: lahat ng bata. Parent: sariling anak lang.
+// Admin: all children. Parent: own children only.
 function canAccessChild(user, childId) {
   if (user.role === 'admin') return true;
   return !!db.prepare('SELECT 1 FROM children WHERE id = ? AND parent_id = ?').get(childId, user.id);
@@ -104,10 +104,10 @@ setInterval(retryOutbox, 2 * 60 * 1000);
 app.post('/api/signup', (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !email.includes('@') || !password || password.length < 6)
-    return res.status(400).json({ error: 'Kumpletuhin ang name, email at password (min 6)' });
+    return res.status(400).json({ error: 'Complete the name, email, and password (min 6)' });
   const em = email.trim().toLowerCase();
   if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(em))
-    return res.status(409).json({ error: 'Registered na ang email na iyan' });
+    return res.status(409).json({ error: 'That email is already registered' });
   const info = db.prepare('INSERT INTO users (role, name, email, password_hash) VALUES (?, ?, ?, ?)')
     .run('parent', name.trim(), em, bcrypt.hashSync(password, 10));
   const user = { id: info.lastInsertRowid, role: 'parent', name: name.trim() };
@@ -119,11 +119,11 @@ app.post('/api/login', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE email = ? AND role = ?')
     .get(String(email || '').trim().toLowerCase(), role);
   if (!u || !u.password_hash || !bcrypt.compareSync(String(password || ''), u.password_hash))
-    return res.status(401).json({ error: 'Mali ang email, password o role' });
+    return res.status(401).json({ error: 'Incorrect email, password, or role' });
   res.json({ token: signToken(u), user: { id: u.id, role: u.role, name: u.name } });
 });
 
-// ---------- Mga bata at QR scan ----------
+// ---------- Children and QR scan ----------
 app.get('/api/children', auth(), (req, res) => {
   const rows = req.user.role === 'admin'
     ? db.prepare('SELECT c.*, u.name AS parent_name, u.email AS parent_email FROM children c JOIN users u ON u.id = c.parent_id ORDER BY c.name').all()
@@ -134,7 +134,7 @@ app.get('/api/children', auth(), (req, res) => {
 app.post('/api/children', auth(['parent']), (req, res) => {
   const { name, address, age, dob, phone, allergies, classroom, medical_notes, emergency_name, emergency_phone } = req.body;
   if (!name || !address || !dob || !phone)
-    return res.status(400).json({ error: 'Kumpletuhin ang form' });
+    return res.status(400).json({ error: 'Complete the form' });
   const token = crypto.randomBytes(16).toString('hex');
   const info = db.prepare(`INSERT INTO children
       (parent_id, name, address, age, dob, phone, allergies, qr_token, classroom, medical_notes, emergency_name, emergency_phone)
@@ -149,7 +149,7 @@ app.post('/api/children', auth(['parent']), (req, res) => {
 app.post('/api/scan', auth(['admin']), async (req, res) => {
   const token = String(req.body.token || '').replace('KIDSCARE:', '');
   const child = db.prepare('SELECT c.*, u.name AS parent_name, u.email AS parent_email FROM children c JOIN users u ON u.id = c.parent_id WHERE c.qr_token = ?').get(token);
-  if (!child) return res.status(404).json({ error: 'Hindi kilalang QR code' });
+  if (!child) return res.status(404).json({ error: 'Unknown QR code' });
 
   const mode = req.body.mode === 'departure' ? 'departure' : 'arrival';   // arrival = Time In, departure = Time Out
   const timeIn = mode === 'arrival';
@@ -190,13 +190,13 @@ app.get('/api/parents', auth(['admin']), (req, res) => {
 app.post('/api/test-email', auth(['admin']), async (req, res) => {
   const me = db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
   const to = String(req.body.to || (me && me.email) || '').trim();
-  if (!to) return res.status(400).json({ error: 'Walang email address' });
+  if (!to) return res.status(400).json({ error: 'No email address provided' });
   try {
     await sendMail({
       to,
       subject: 'KidsCare email test',
-      text: 'Kung nababasa mo ito, gumagana ang email sending ng KidsCare sa Render.',
-      html: mailHtml('Email test', '<p>Kung nababasa mo ito, <strong>gumagana</strong> ang email sending ng KidsCare sa Render.</p>')
+      text: 'If you can read this, email sending from KidsCare on Render is working.',
+      html: mailHtml('Email test', '<p>If you can read this, <strong>email sending</strong> from KidsCare on Render is working.</p>')
     });
     res.json({ ok: true, to });
   } catch (e) {
@@ -243,10 +243,10 @@ app.post('/api/activities', auth(['admin']), upload.array('photos', 5), (req, re
   const message = String(req.body.message || '').trim().slice(0, 2000);
   const type = ['all', 'child'].includes(req.body.targetType) ? req.body.targetType : 'all';
   const value = type === 'all' ? null : String(req.body.targetValue || '');
-  if (!title) return res.status(400).json({ error: 'Lagyan ng title' });
+  if (!title) return res.status(400).json({ error: 'Title is required' });
 
   const children = targetChildren(type, value);
-  if (!children.length) return res.status(400).json({ error: 'Walang estudyante sa napiling audience' });
+  if (!children.length) return res.status(400).json({ error: 'No students in the selected audience' });
   const parentIds = [...new Set(children.map(c => c.parent_id))];
   const notify = req.body.notify === '1';
 
@@ -284,7 +284,7 @@ const getThread = pid => db.prepare(CHAT_SQL + ' WHERE m.parent_id = ? ORDER BY 
 
 function postChat(req, res, pid) {
   const text = String(req.body.text || '').trim().slice(0, 1000);
-  if (!text) return res.status(400).json({ error: 'Walang laman ang mensahe' });
+  if (!text) return res.status(400).json({ error: 'Message cannot be empty' });
   if (!db.prepare("SELECT 1 FROM users WHERE id = ? AND role = 'parent'").get(pid)) return res.status(404).json({ error: 'Parent not found' });
   const info = db.prepare('INSERT INTO chat_messages (parent_id, sender_id, text) VALUES (?, ?, ?)').run(pid, req.user.id, text);
   const msg = db.prepare(CHAT_SQL + ' WHERE m.id = ?').get(info.lastInsertRowid);

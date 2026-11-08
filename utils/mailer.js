@@ -71,14 +71,14 @@ async function sendMail({ to, subject, text, html, fromName, fromEmail }) {
 }
 
 /**
- * Nagpapadala ng email notification pagkatapos ng QR scan.
- * @param {string} toEmail - Email ng magulang/guardian
- * @param {string} childName - Pangalan ng bata
- * @param {string} status - 'IN' o 'OUT'
- * @param {string} timeString - Oras ng scan
+ * Sends an email notification after a QR scan.
+ * @param {string} toEmail - Parent/guardian email
+ * @param {string} childName - Child's name
+ * @param {string} status - 'IN' or 'OUT'
+ * @param {string} timeString - Scan time
  */
 async function sendQRScanNotification(toEmail, childName, status, timeString) {
-  const actionText = status === 'IN' ? 'dumating na sa skwelahan/center' : 'nakauwi/umalis na';
+  const actionText = status === 'IN' ? 'has arrived at school/center' : 'has gone home/left';
 
   return sendMail({
     to: toEmail,
@@ -86,11 +86,11 @@ async function sendQRScanNotification(toEmail, childName, status, timeString) {
     html: `
       <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #4CAF50; border-radius: 8px;">
         <h2 style="color: #2E7D32;">KidsCare Attendance Alert</h2>
-        <p>Magandang araw,</p>
-        <p>Nais naming ipagbigay-alam na si <strong>${childName}</strong> ay <strong>${actionText}</strong>.</p>
-        <p><strong>Oras:</strong> ${timeString}</p>
+        <p>Good day,</p>
+        <p>We would like to let you know that <strong>${childName}</strong> <strong>${actionText}</strong>.</p>
+        <p><strong>Time:</strong> ${timeString}</p>
         <br/>
-        <p>Salamat sa paggamit ng KidsCare App!</p>
+        <p>Thank you for using the KidsCare App!</p>
       </div>
     `,
   });

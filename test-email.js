@@ -17,12 +17,12 @@ if (!process.env.BREVO_API_KEY && (!process.env.GMAIL_USER || !process.env.GMAIL
     const info = await sendMail({
       to,
       subject: 'KidsCare Test Notification',
-      text: 'Magandang araw! Kung nababasa mo ito, gumagana nang maayos ang notification system ng KidsCare.',
+      text: 'Good day! If you can read this, the KidsCare notification system is working properly.',
       html: `
         <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
           <h2 style="color: #4CAF50;">KidsCare Notification Test</h2>
-          <p>Magandang araw!</p>
-          <p>Kung nababasa mo ito, <strong>gumagana nang maayos</strong> ang notification system ng KidsCare.</p>
+          <p>Good day!</p>
+          <p>If you can read this, the KidsCare <strong>notification system is working properly</strong>.</p>
           <hr/>
           <small style="color: #777;">System generated test email.</small>
         </div>
@@ -35,14 +35,14 @@ if (!process.env.BREVO_API_KEY && (!process.env.GMAIL_USER || !process.env.GMAIL
     console.error('FAILED:', error.message);
     if (emailProvider === 'brevo') {
       console.error('\nTroubleshooting checklist (Brevo):');
-      console.error(' 1. Tama ba ang BREVO_API_KEY?');
-      console.error(' 2. Verified ba ang MAIL_FROM (sender email) sa Brevo dashboard?');
-      console.error(' 3. Naubos na ba ang daily sending limit ng free plan (300/day)?');
+      console.error(' 1. Is the BREVO_API_KEY correct?');
+      console.error(' 2. Is MAIL_FROM (sender email) verified in the Brevo dashboard?');
+      console.error(' 3. Have you reached the free plan daily sending limit (300/day)?');
     } else {
       console.error('\nTroubleshooting checklist (Gmail SMTP):');
-      console.error(' 1. Siguraduhing NAKA-ON ang 2-Step Verification sa Google Account.');
-      console.error(' 2. Siguraduhing tama ang 16-character App Password (walang spaces).');
-      console.error(' 3. I-check kung may internet connection at kung hindi blocked ang SMTP port.');
+      console.error(' 1. Make sure 2-Step Verification is enabled on the Google Account.');
+      console.error(' 2. Make sure the 16-character App Password is correct (no spaces).');
+      console.error(' 3. Check the internet connection and whether the SMTP port is blocked.');
     }
   }
 })();

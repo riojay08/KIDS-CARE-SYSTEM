@@ -17,7 +17,7 @@ const api = {
     });
     
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'May error, subukan ulit');
+    if (!res.ok) throw new Error(data.error || 'Something went wrong, please try again');
     return data;
   }
 };

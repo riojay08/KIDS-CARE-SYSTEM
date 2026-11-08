@@ -182,7 +182,7 @@ const ts=s=>new Date(String(s).replace(' ','T')+'Z').getTime();
 const userFromToken=t=>{try{const p=JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));return{id:p.id,role:p.role,name:p.name}}catch(e){return null}};
 const mapMsg=m=>({id:m.id,parentId:String(m.parent_id),from:m.sender_role,name:m.sender_name,text:m.text,t:ts(m.created_at)});
 const qrOf=id=>qrPng('KIDSCARE:'+db.children.find(c=>c.id==id).token);
-// Kinukuha ang bata/photos sa server at inaayos sa hugis na gamit ng mga view
+// Fetches children/photos from the server and shapes them for the views
 async function refresh(){
  const ch=await api.req('/children');
  db.children=ch.map(c=>({id:String(c.id),parentId:String(c.parent_id),name:c.name,address:c.address,age:c.age,dob:c.dob,phone:c.phone,allergies:c.allergies,status:c.status,token:c.qr_token,code:c.student_code,classroom:c.classroom||'',medical:c.medical_notes,emName:c.emergency_name,emPhone:c.emergency_phone,pname:c.parent_name,pemail:c.parent_email}));
