@@ -257,7 +257,7 @@ async function doSignup(e){e.preventDefault();if(!chkAll('#f'))return bad();
 function logout(){stopScan();api.setToken(null);cur=null;loadedCid=null;chatCid=null;thread=null;unread={};if(socket){socket.disconnect();socket=null}db={users:[],children:[],photos:[],feed:[],scans:[],msgs:[],mail:[]};closeModal();idb.clear().catch(()=>{});mode='login';authView()}
 
 /* ===== Shell ===== */
-const TABS={parent:[['add','Add child'],['photos','Updates'],['qr','QR pass'],['attendance','Attendance'],['chat','Messages']],admin:[['scan','Scanner'],['photo','Post update'],['students','Students'],['parents','Parents'],['inbox','Inbox'],['reports','Reports']]};
+const TABS={parent:[['add','Add child'],['photos','Updates'],['qr','QR pass'],['attendance','Attendance'],['chat','Messages']],admin:[['scan','Scanner'],['photo','Post update'],['students','Pupils'],['parents','Parents'],['inbox','Inbox'],['reports','Reports']]};
 function go(){const u=me();if(!u)return authView();
  tab=tab||TABS[u.role][0][0];
  $('#app').innerHTML=`<header class="sticky z-40 backdrop-blur-xl bg-slate-950/70 border-b border-amber-400/20" style="top:env(safe-area-inset-top,0px)"><div class="max-w-6xl mx-auto px-3 py-2 flex flex-wrap items-center gap-2 sm:gap-3">
@@ -339,7 +339,7 @@ async function scanFile(f){if(!f)return;let txt;
  const raw=String(txt).replace('KIDSCARE:',''),c=db.children.find(c=>c.token===raw||c.id===raw);
  if(!c)return toast('This QR code is not recognised','bad');
  const when=new Date(),tin=scanMode==='arrival',row=(k,v)=>`<div class="flex justify-between gap-3 py-1 border-b border-white/5"><span class="text-slate-400">${k}</span><span class="text-right">${v}</span></div>`;
- askConfirm('Confirm scan',null,()=>handleScan(txt,when.toISOString()),'Confirm Scan & Notify',`<div class="text-sm mb-4">${row('Student','<b>'+esc(c.name)+'</b>')}${row('Student ID',esc(c.code))}${row('Parent',esc(c.pname))}${row('Contact number',esc(c.phone))}${row('Action','<b>'+(tin?'Time In':'Time Out')+'</b>')}${row('Time',when.toLocaleString())}</div>`)}
+ askConfirm('Confirm scan',null,()=>handleScan(txt,when.toISOString()),'Confirm Scan & Notify',`<div class="text-sm mb-4">${row('Pupil','<b>'+esc(c.name)+'</b>')}${row('Pupil ID',esc(c.code))}${row('Parent',esc(c.pname))}${row('Contact number',esc(c.phone))}${row('Action','<b>'+(tin?'Time In':'Time Out')+'</b>')}${row('Time',when.toLocaleString())}</div>`)}
 function startScan(){stopScan();if(typeof Html5Qrcode==='undefined')return toast('Scanner library unavailable – use the simulator','bad');
  scanner=new Html5Qrcode('reader');$('#reader').innerHTML='';
  scanner.start({facingMode:'environment'},{fps:10,qrbox:200},t=>{if(Date.now()-lastScan<4000)return;lastScan=Date.now();handleScan(t)},()=>{}).catch(()=>{scanner=null;$('#reader').textContent='Camera unavailable';toast('Camera unavailable – use the simulator','bad')})}
@@ -358,13 +358,13 @@ function postView(){postFiles=[];return `<div class="grid md:grid-cols-2 gap-4">
  <div class="fl"><select id="pk"><option value="activity">Classroom activity</option><option value="announcement">Announcement</option></select><label>Type</label></div>
  ${fl('ptl','Title')}
  <div class="fl"><textarea id="pm" rows="3" placeholder=" "></textarea><label>Message (optional)</label></div>
- <div class="grid grid-cols-1 sm:grid-cols-2 gap-3"><div class="fl"><select id="pt" onchange="audOpts()"><option value="all">All students</option><option value="child">One student</option></select><label>Audience</label></div><div class="fl"><select id="pa" onchange="countRecip()"></select><label>Who</label></div></div>
+ <div class="grid grid-cols-1 sm:grid-cols-2 gap-3"><div class="fl"><select id="pt" onchange="audOpts()"><option value="all">All pupils</option><option value="child">One pupil</option></select><label>Audience</label></div><div class="fl"><select id="pa" onchange="countRecip()"></select><label>Who</label></div></div>
  <label class="block border-2 border-dashed border-amber-400/50 rounded-xl p-4 text-center cursor-pointer hover:bg-amber-400/10 mb-3"><input type="file" accept="image/*" multiple class="hidden" onchange="pickPhotos(this)"><div id="pv">Add photos (optional, up to 5)</div></label>
  <label class="flex items-center gap-3 p-3 rounded-xl bg-white/5 mb-3 cursor-pointer"><input id="pn" type="checkbox" class="w-5 h-5 accent-amber-400"><span class="text-sm">Notify parents by Email and SMS now <span class="text-slate-400">(<b id="rc">0</b> parents)</span></span></label>
  <button class="btn w-full" onclick="sendPost()">Publish</button></div>
  <div class="glass p-5"><h2 class="font-bold neon mb-3">Recent posts</h2><div id="posts" class="space-y-2 text-sm"></div></div></div>`}
 function audOpts(){const t=$('#pt'),s=$('#pa');if(!t||!s)return;
- if(t.value==='child')s.innerHTML=db.children.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')||'<option value="">No students</option>';
+ if(t.value==='child')s.innerHTML=db.children.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')||'<option value="">No pupils</option>';
  else s.innerHTML='<option value="">Everyone</option>';
  countRecip()}
 function countRecip(){const e=$('#rc');if(!e)return;const t=$('#pt').value,v=$('#pa').value;e.textContent=new Set(db.children.filter(c=>t==='all'||(t==='child'&&c.id===v)).map(c=>c.parentId)).size}
@@ -378,17 +378,17 @@ async function sendPost(){if(!chk($('#ptl')))return;
 async function loadPosts(){try{const l=await api.req('/activities'),b=$('#posts');if(b)b.innerHTML=l.map(a=>`<div id="post-${a.id}" class="item flex items-start gap-3 p-2 rounded-lg bg-white/5"><div class="flex-1 min-w-0"><div class="truncate"><span class="chip mr-1">${a.kind==='announcement'?'Announcement':'Activity'}</span><b>${esc(a.title)}</b></div><div class="text-xs text-slate-400 mt-1">${new Date(ts(a.created_at)).toLocaleString()} · ${a.photos} photo(s) · ${a.notify?'Email '+a.emails_sent+'/'+a.recipients+' sent'+(a.emails_failed?', '+a.emails_failed+' failed':''):'No email'}</div></div><button class="btn2 btn-danger btn-sm" onclick="delPost(${a.id})">Delete</button></div>`).join('')||'<p class="text-slate-500">No posts yet.</p>'}catch(e){}}
 
 /* ===== Admin: lists ===== */
-function studentsView(){return `<div class="flex items-center gap-3 mb-3"><h2 class="font-bold neon flex-1">Students (${db.children.length})</h2><input class="topinput flex-1 min-w-0 sm:flex-none sm:w-64" placeholder="Search name or ID…" oninput="filterStu(this.value)"></div>
- <div class="glass divide-y divide-white/10">${db.children.map(c=>`<button class="stu item w-full flex items-center gap-3 p-3 text-left hover:bg-amber-400/10" data-id="${c.id}" data-q="${esc((c.name+' '+c.code+' '+c.classroom).toLowerCase())}" onclick="openStudent('${c.id}')"><div class="avatar">${initials(c.name)}</div><div class="flex-1"><div class="font-semibold">${esc(c.name)}</div><div class="text-xs text-slate-400">${esc(c.code)}</div></div>${badge(c)}</button>`).join('')||'<p class="p-8 text-center text-slate-400">No students yet. Parents add them from their dashboard.</p>'}</div>`}
+function studentsView(){return `<div class="flex items-center gap-3 mb-3"><h2 class="font-bold neon flex-1">Pupils (${db.children.length})</h2><input class="topinput flex-1 min-w-0 sm:flex-none sm:w-64" placeholder="Search name or ID…" oninput="filterStu(this.value)"></div>
+ <div class="glass divide-y divide-white/10">${db.children.map(c=>`<button class="stu item w-full flex items-center gap-3 p-3 text-left hover:bg-amber-400/10" data-id="${c.id}" data-q="${esc((c.name+' '+c.code+' '+c.classroom).toLowerCase())}" onclick="openStudent('${c.id}')"><div class="avatar">${initials(c.name)}</div><div class="flex-1"><div class="font-semibold">${esc(c.name)}</div><div class="text-xs text-slate-400">${esc(c.code)}</div></div>${badge(c)}</button>`).join('')||'<p class="p-8 text-center text-slate-400">No pupils yet. Parents add them from their dashboard.</p>'}</div>`}
 function filterStu(q){q=q.toLowerCase();document.querySelectorAll('.stu').forEach(b=>b.style.display=b.dataset.q.includes(q)?'':'none')}
 function openStudent(id){const c=db.children.find(c=>c.id===id);
  const row=(k,v)=>`<div class="flex justify-between gap-3 py-1 text-sm border-b border-white/5"><span class="text-slate-400">${k}</span><span class="text-right">${esc(v||'—')}</span></div>`;
  const sec=(t,b)=>`<div class="mb-3"><h4 class="text-xs uppercase tracking-wider text-cyan-300 mb-1">${t}</h4>${b}</div>`;
  openModal(`<div class="text-center mb-3"><img src="${qrOf(id)}" alt="QR" class="mx-auto w-28 rounded-lg"><h3 class="font-bold text-lg mt-2">${esc(c.name)}</h3><div class="text-xs text-slate-400">${esc(c.code)}</div><div class="mt-1">${badge(c)}</div></div>
- ${sec('Personal details',row('Full name',c.name)+row('Student ID',c.code)+row('Age',c.age)+row('Date of birth',c.dob)+row('Address',c.address))}
+ ${sec('Personal details',row('Full name',c.name)+row('Pupil ID',c.code)+row('Age',c.age)+row('Date of birth',c.dob)+row('Address',c.address))}
  ${sec('Parent / guardian',row('Name',c.pname)+row('Gmail',c.pemail)+row('Contact number',c.phone))}
  ${sec('Medical notes',row('Allergies',c.allergies.join(', ')||'None')+row('Medical notes',c.medical))}
- <div class="grid grid-cols-2 gap-2"><button class="btn2" onclick="printQr('${id}')">Print QR</button><button class="btn2 btn-danger" onclick="delStudent('${id}')">Delete student</button></div>`)}
+ <div class="grid grid-cols-2 gap-2"><button class="btn2" onclick="printQr('${id}')">Print QR</button><button class="btn2 btn-danger" onclick="delStudent('${id}')">Delete pupil</button></div>`)}
 function parentsView(){const ps=db.users.filter(u=>u.role==='parent');return `<h2 class="text-lg font-bold neon mb-3">Parents (${ps.length})</h2><div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">${ps.map(p=>{const kids=db.children.filter(c=>c.parentId===p.id);return `<div id="par-${p.id}" class="glass item p-4 flex flex-col gap-2"><div class="flex items-center gap-3"><div class="avatar">${initials(p.name)}</div><div class="min-w-0"><div class="font-semibold truncate">${esc(p.name)}</div><div class="text-xs text-slate-400 truncate">${esc(p.email)}</div></div></div><div class="text-xs text-slate-300">Children: ${kids.map(c=>esc(c.name)).join(', ')||'None'}</div><div class="mt-auto pt-1"><button class="btn2 btn-danger btn-sm" onclick="delParent('${p.id}')">Delete parent</button></div></div>`}).join('')||'<div class="glass p-8 text-center text-slate-400 sm:col-span-2">No parents registered yet.</div>'}</div>`}
 
 /* ===== Admin: monthly attendance report ===== */
@@ -405,17 +405,17 @@ function drawReport(){const r=rpt,s=r.summary,b=$('#rbox');if(!b)return;
  <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">${statCard('Average attendance',s.avgRate+'%'+trend)}${statCard('Always present',s.perfect)}${statCard('Late arrivals',s.lates)}${statCard('Absent days (total)',s.absences)}</div>
  <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-4 mb-4">${card('Always present',r.perfect,c=>esc(c.code))}${card('Frequent lates',r.lates,c=>c.late+' days')}${card('Frequent early pickups',r.early,c=>c.early+' days')}${card('Needs follow-up (absences)',r.absent,c=>c.absent+' absent'+(c.maxAbsentStreak>1?', '+c.maxAbsentStreak+' in a row':''))}${card('Late pickups (after '+r.rules.closing+')',r.latePickups,c=>c.latePickup+' days')}${card('Missing Time Out scan',r.missingOut,c=>c.missingOut+' days')}</div>
  <div class="glass p-4 mb-4"><h3 class="font-bold mb-3">Daily attendance</h3><div class="flex items-end gap-1 h-28">${r.daily.map(x=>`<div class="flex-1 h-full flex flex-col justify-end items-center" title="${x.date}: ${x.present}"><div class="w-full rounded-t bg-gradient-to-t from-amber-500 to-pink-500" style="height:${s.students?Math.max(3,x.present/s.students*100):3}%"></div><span class="text-[9px] text-slate-500">${x.date.slice(8)}</span></div>`).join('')||'<p class="text-slate-500 text-sm">No school days yet.</p>'}</div></div>
- <div class="glass p-4 overflow-x-auto"><h3 class="font-bold mb-2">Days attended per child</h3><table class="w-full text-sm whitespace-nowrap"><tr class="text-left text-slate-400"><th class="py-1">Student</th><th>ID</th><th>Present</th><th>Absent</th><th>Late</th><th>Early</th><th>Avg stay</th><th>Rate</th></tr>${r.children.map(c=>`<tr class="border-t border-white/5"><td class="py-1 pr-3">${esc(c.name)}</td><td class="pr-3">${esc(c.code)}</td><td>${c.present}</td><td>${c.absent}</td><td>${c.late}</td><td>${c.early}</td><td>${c.avgStay?c.avgStay+' h':'-'}</td><td>${c.rate}%</td></tr>`).join('')}</table></div>`}
+ <div class="glass p-4 overflow-x-auto"><h3 class="font-bold mb-2">Days attended per child</h3><table class="w-full text-sm whitespace-nowrap"><tr class="text-left text-slate-400"><th class="py-1">Pupil</th><th>ID</th><th>Present</th><th>Absent</th><th>Late</th><th>Early</th><th>Avg stay</th><th>Rate</th></tr>${r.children.map(c=>`<tr class="border-t border-white/5"><td class="py-1 pr-3">${esc(c.name)}</td><td class="pr-3">${esc(c.code)}</td><td>${c.present}</td><td>${c.absent}</td><td>${c.late}</td><td>${c.early}</td><td>${c.avgStay?c.avgStay+' h':'-'}</td><td>${c.rate}%</td></tr>`).join('')}</table></div>`}
 function printReport(){if(!rpt)return toast('Generate a report first','bad');const r=rpt,s=r.summary;
  const tb=(h,rows)=>`<table style="width:100%;border-collapse:collapse;font:13px sans-serif;margin:6px 0 16px"><tr>${h.map(x=>`<th style="text-align:left;border-bottom:2px solid #333;padding:4px">${x}</th>`).join('')}</tr>${rows.map(c=>`<tr>${c.map(x=>`<td style="border-bottom:1px solid #ddd;padding:4px">${esc(x)}</td>`).join('')}</tr>`).join('')||'<tr><td style="padding:4px">None</td></tr>'}</table>`;
  $('#printArea').innerHTML=`<div style="text-align:left;font-family:sans-serif;color:#000"><h1 style="margin:0">KidsCare Monthly Attendance Report</h1><p style="margin:4px 0 14px">${esc(r.month)} | ${r.schoolDays} school days (Mon-Fri) | Late Time In after ${r.rules.start} | Early Time Out before ${r.rules.end} | Closing ${r.rules.closing}</p>
- <h3>Summary</h3>${tb(['Students','Average attendance','Always present','Late arrivals','Early pickups','Late pickups','Absent days'],[[s.students,s.avgRate+'%',s.perfect,s.lates,s.early,s.latePickups,s.absences]])}
- <h3>Always present</h3>${tb(['Student','ID'],r.perfect.map(c=>[c.name,c.code]))}
- <h3>Frequent lates</h3>${tb(['Student','Late days'],r.lates.map(c=>[c.name,c.late]))}
- <h3>Frequent early pickups</h3>${tb(['Student','Early days'],r.early.map(c=>[c.name,c.early]))}
- <h3>Needs follow-up (absences)</h3>${tb(['Student','Absent days','Longest streak'],r.absent.map(c=>[c.name,c.absent,c.maxAbsentStreak]))}
- <h3>Late pickups</h3>${tb(['Student','Days'],r.latePickups.map(c=>[c.name,c.latePickup]))}
- <h3>Days attended per child</h3>${tb(['Student','ID','Present','Absent','Late','Early','Avg stay','Rate'],r.children.map(c=>[c.name,c.code,c.present,c.absent,c.late,c.early,c.avgStay?c.avgStay+' h':'-',c.rate+'%']))}</div>`;setTimeout(()=>window.print(),100)}
+ <h3>Summary</h3>${tb(['Pupils','Average attendance','Always present','Late arrivals','Early pickups','Late pickups','Absent days'],[[s.students,s.avgRate+'%',s.perfect,s.lates,s.early,s.latePickups,s.absences]])}
+ <h3>Always present</h3>${tb(['Pupil','ID'],r.perfect.map(c=>[c.name,c.code]))}
+ <h3>Frequent lates</h3>${tb(['Pupil','Late days'],r.lates.map(c=>[c.name,c.late]))}
+ <h3>Frequent early pickups</h3>${tb(['Pupil','Early days'],r.early.map(c=>[c.name,c.early]))}
+ <h3>Needs follow-up (absences)</h3>${tb(['Pupil','Absent days','Longest streak'],r.absent.map(c=>[c.name,c.absent,c.maxAbsentStreak]))}
+ <h3>Late pickups</h3>${tb(['Pupil','Days'],r.latePickups.map(c=>[c.name,c.latePickup]))}
+ <h3>Days attended per child</h3>${tb(['Pupil','ID','Present','Absent','Late','Early','Avg stay','Rate'],r.children.map(c=>[c.name,c.code,c.present,c.absent,c.late,c.early,c.avgStay?c.avgStay+' h':'-',c.rate+'%']))}</div>`;setTimeout(()=>window.print(),100)}
 
 /* ===== Parent: attendance ===== */
 let att=null;
@@ -432,9 +432,9 @@ function askConfirm(title,msg,fn,label='Delete',body=''){_yes=fn;$('#modal').inn
 async function doYes(){const f=_yes;_yes=null;closeModal();if(!f)return;try{await f()}catch(err){toast(err.message,'bad')}}
 const gone=async sel=>{const el=document.querySelector(sel);if(el){el.classList.add('leaving');await new Promise(r=>setTimeout(r,260))}};
 const del=(path,sel,ok,after)=>async()=>{await api.req(path,{method:'DELETE'});await gone(sel);await refresh();(after||view)();toast(ok)};
-function delScan(id){askConfirm('Delete check-in','This removes the entry from the log. The student status is recalculated from the remaining check-ins.',del('/scans/'+id,'#scan-'+id,'Check-in deleted',renderLog))}
+function delScan(id){askConfirm('Delete check-in','This removes the entry from the log. The pupil status is recalculated from the remaining check-ins.',del('/scans/'+id,'#scan-'+id,'Check-in deleted',renderLog))}
 function delPost(id){askConfirm('Delete post','This removes the post and its photos for every parent.',async()=>{await api.req('/activities/'+id,{method:'DELETE'});await gone('#post-'+id);await loadPosts();toast('Post deleted')})}
-function delStudent(id){const c=db.children.find(c=>c.id===id);askConfirm('Delete student','Permanently deletes '+c.name+', the QR pass and the check-in history. This cannot be undone.',del('/children/'+id,'.stu[data-id="'+id+'"]','Student deleted'))}
+function delStudent(id){const c=db.children.find(c=>c.id===id);askConfirm('Delete pupil','Permanently deletes '+c.name+', the QR pass and the check-in history. This cannot be undone.',del('/children/'+id,'.stu[data-id="'+id+'"]','Pupil deleted'))}
 function delChild(id){const c=db.children.find(c=>c.id===id);askConfirm('Remove child','This removes '+c.name+' and the QR pass from your account. This cannot be undone.',del('/children/'+id,'#kid-'+id,'Child removed'))}
 function delParent(id){const p=db.users.find(u=>u.id===id),n=db.children.filter(c=>c.parentId===id).length;askConfirm('Delete parent','Deletes the account of '+p.name+(n?', '+n+' linked child record(s)':'')+' and the chat history. This cannot be undone.',del('/parents/'+id,'#par-'+id,'Parent deleted'))}
 function hideUpdate(id){askConfirm('Remove update','This removes the update from your feed only. Other parents can still see it.',del('/feed/'+id,'#feed-'+id,'Update removed'),'Remove')}
