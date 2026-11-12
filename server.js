@@ -132,14 +132,14 @@ app.get('/api/children', auth(), (req, res) => {
 });
 
 app.post('/api/children', auth(['parent']), (req, res) => {
-  const { name, address, age, dob, phone, allergies, classroom, medical_notes, emergency_name, emergency_phone } = req.body;
+  const { name, address, age, dob, gender, phone, allergies, classroom, medical_notes, emergency_name, emergency_phone } = req.body;
   if (!name || !address || !dob || !phone)
     return res.status(400).json({ error: 'Complete the form' });
   const token = crypto.randomBytes(16).toString('hex');
   const info = db.prepare(`INSERT INTO children
-      (parent_id, name, address, age, dob, phone, allergies, qr_token, classroom, medical_notes, emergency_name, emergency_phone)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(req.user.id, name.trim(), address.trim(), Number(age) || 0, dob, phone.trim(), JSON.stringify(allergies || []), token,
+      (parent_id, name, address, age, dob, gender, phone, allergies, qr_token, classroom, medical_notes, emergency_name, emergency_phone)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(req.user.id, name.trim(), address.trim(), Number(age) || 0, dob, String(gender || '').trim(), phone.trim(), JSON.stringify(allergies || []), token,
       '', String(medical_notes || '').trim(), '', '');
   db.prepare('UPDATE children SET student_code = ? WHERE id = ?')
     .run(`KC-${new Date().getFullYear()}-${String(info.lastInsertRowid).padStart(4, '0')}`, info.lastInsertRowid);
@@ -184,25 +184,6 @@ app.get('/api/scans', auth(['admin']), (req, res) => {
 
 app.get('/api/parents', auth(['admin']), (req, res) => {
   res.json(db.prepare("SELECT id, name, email FROM users WHERE role = 'parent' ORDER BY name").all());
-});
-
-// Admin-only: send a test email to confirm the deployment's email setup works.
-app.post('/api/test-email', auth(['admin']), async (req, res) => {
-  const me = db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
-  const to = String(req.body.to || (me && me.email) || '').trim();
-  if (!to) return res.status(400).json({ error: 'No email address provided' });
-  try {
-    await sendMail({
-      to,
-      subject: 'KidsCare email test',
-      text: 'If you can read this, email sending from KidsCare on Render is working.',
-      html: mailHtml('Email test', '<p>If you can read this, <strong>email sending</strong> from KidsCare on Render is working.</p>')
-    });
-    res.json({ ok: true, to });
-  } catch (e) {
-    console.error('Test email failed:', e.message);
-    res.status(500).json({ error: e.message });
-  }
 });
 
 // ---------- Activities & Announcements (photos + optional email blast) ----------
@@ -308,22 +289,57 @@ const manila = d => {
 };
 const validMonth = m => /^\d{4}-\d{2}$/.test(m || '') ? m : manila(new Date()).date.slice(0, 7);
 const minutes = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+const getSetting = key => (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) || {}).value || '';
+const setSetting = (key, value) => {
+  if (value == null || value === '') db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+  else db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+};
+// Class schedule: which weekdays are school days, and the time rules. Values fall back to the .env defaults.
+function getSchedule() {
+  let days = [1, 2, 3, 4, 5];   // Mon-Fri
+  const raw = getSetting('class_days');
+  if (raw) {
+    try {
+      const a = JSON.parse(raw);
+      if (Array.isArray(a) && a.length) days = [...new Set(a.map(Number).filter(n => n >= 0 && n <= 6))];
+    } catch {}
+  }
+  return {
+    days,
+    start: getSetting('school_start') || SCHOOL_START,
+    end: getSetting('school_end') || SCHOOL_END,
+    closing: getSetting('closing_time') || CLOSING
+  };
+}
+const reportSettings = () => {
+  const s = getSchedule();
+  return { startDate: getSetting('daycare_start'), classDays: s.days, schoolStart: s.start, schoolEnd: s.end, closingTime: s.closing };
+};
 
 function buildReport(month, withPrev = true) {
   const today = manila(new Date()).date;
+  const startDate = getSetting('daycare_start');
+  const schedule = getSchedule();
   const [Y, M] = month.split('-').map(Number);
 
-  // School days = Monday to Friday of that month, up to today
+  // School days = selected class weekdays of that month, up to today (and on/after the daycare start date)
   const days = [];
   for (let d = 1; d <= new Date(Date.UTC(Y, M, 0)).getUTCDate(); d++) {
     const iso = `${month}-${String(d).padStart(2, '0')}`;
     const wd = new Date(Date.UTC(Y, M - 1, d)).getUTCDay();
-    if (wd !== 0 && wd !== 6 && iso <= today) days.push(iso);
+    if (schedule.days.includes(wd) && iso <= today && (!startDate || iso >= startDate)) days.push(iso);
   }
 
   const kids = db.prepare('SELECT id, parent_id, name, student_code FROM children ORDER BY name').all();
   const scans = db.prepare(`SELECT child_id, type, created_at FROM scans
     WHERE created_at >= datetime(?, '-1 day') AND created_at < datetime(?, '+1 month', '+1 day') ORDER BY id`).all(`${month}-01 00:00:00`, `${month}-01 00:00:00`);
+  // Each child's attendance starts on their first Time In scan, so earlier school days are not counted as absences.
+  const firstScan = db.prepare(`SELECT child_id,
+      MIN(CASE WHEN type = 'arrival' THEN created_at END) AS first_in,
+      MIN(created_at) AS first_any
+    FROM scans GROUP BY child_id`).all();
+  const firstDate = Object.fromEntries(firstScan.map(s =>
+    [s.child_id, manila(new Date((s.first_in || s.first_any).replace(' ', 'T') + 'Z')).date]));
 
   const per = {};   // child -> date -> { in: earliest Time In, out: latest Time Out }
   for (const s of scans) {
@@ -336,35 +352,38 @@ function buildReport(month, withPrev = true) {
 
   const children = kids.map(k => {
     const byDay = per[k.id] || {};
-    const d = Object.values(byDay);
+    const childDays = firstDate[k.id] ? days.filter(day => day >= firstDate[k.id]) : [];
+    const d = childDays.map(day => byDay[day]).filter(Boolean);
     let run = 0, longest = 0;
-    for (const day of days) { if (byDay[day]) run = 0; else longest = Math.max(longest, ++run); }
+    for (const day of childDays) { if (byDay[day]) run = 0; else longest = Math.max(longest, ++run); }
     const stays = d.filter(e => e.in && e.out && e.out > e.in).map(e => (minutes(e.out) - minutes(e.in)) / 60);
     return {
       id: k.id, parentId: k.parent_id, name: k.name, code: k.student_code,
+      schoolDays: childDays.length,
       present: d.length,
-      absent: Math.max(days.length - d.length, 0),
+      absent: Math.max(childDays.length - d.length, 0),
       maxAbsentStreak: longest,
-      late: d.filter(e => e.in && e.in > SCHOOL_START).length,
-      early: d.filter(e => e.out && e.out < SCHOOL_END).length,
-      latePickup: d.filter(e => e.out && e.out > CLOSING).length,
-      missingOut: Object.entries(byDay).filter(([day, e]) => e.in && !e.out && day < today).length,
+      late: d.filter(e => e.in && e.in > schedule.start).length,
+      early: d.filter(e => e.out && e.out < schedule.end).length,
+      latePickup: d.filter(e => e.out && e.out > schedule.closing).length,
+      missingOut: childDays.filter(day => byDay[day] && byDay[day].in && !byDay[day].out && day < today).length,
       avgStay: stays.length ? Math.round(stays.reduce((a, b) => a + b, 0) / stays.length * 10) / 10 : null,
-      rate: days.length ? Math.round(d.length / days.length * 100) : 0
+      rate: childDays.length ? Math.round(d.length / childDays.length * 100) : 0
     };
   });
   const sum = f => children.reduce((a, c) => a + f(c), 0);
   const report = {
-    month, schoolDays: days.length, rules: { start: SCHOOL_START, end: SCHOOL_END, closing: CLOSING, frequent: FREQUENT },
+    month, startDate, schoolDays: days.length, rules: { start: schedule.start, end: schedule.end, closing: schedule.closing, frequent: FREQUENT, days: schedule.days },
+    schedule: { days: schedule.days, start: schedule.start, end: schedule.end, closing: schedule.closing },
     summary: {
       students: kids.length,
-      avgRate: kids.length ? Math.round(sum(c => c.rate) / kids.length) : 0,
+      avgRate: (() => { const active = children.filter(c => c.schoolDays); return active.length ? Math.round(active.reduce((a, c) => a + c.rate, 0) / active.length) : 0; })(),
       prevAvgRate: null,
-      perfect: children.filter(c => days.length && c.present === days.length).length,
+      perfect: children.filter(c => c.schoolDays && c.present === c.schoolDays).length,
       timeIns: sum(c => c.present), lates: sum(c => c.late), early: sum(c => c.early),
       latePickups: sum(c => c.latePickup), absences: sum(c => c.absent)
     },
-    perfect: children.filter(c => days.length && c.present === days.length),                       // always present
+    perfect: children.filter(c => c.schoolDays && c.present === c.schoolDays),                       // always present
     lates: children.filter(c => c.late >= FREQUENT).sort((a, b) => b.late - a.late),
     early: children.filter(c => c.early >= FREQUENT).sort((a, b) => b.early - a.early),
     absent: children.filter(c => c.absent >= FREQUENT).sort((a, b) => b.absent - a.absent),        // needs follow-up
@@ -383,6 +402,37 @@ function buildReport(month, withPrev = true) {
 app.get('/api/report', auth(['admin']), (req, res) => res.json(buildReport(validMonth(req.query.month))));
 app.get('/api/reports', auth(['admin']), (req, res) =>
   res.json(db.prepare('SELECT month, notified, created_at FROM monthly_reports ORDER BY month DESC LIMIT 12').all()));
+// Daycare start date, class days, and class time rules used by the reports.
+app.get('/api/report/settings', auth(['admin']), (req, res) => res.json(reportSettings()));
+app.post('/api/report/settings', auth(['admin']), (req, res) => {
+  const b = req.body || {};
+  const bad = msg => res.status(400).json({ error: msg });
+  const isTime = t => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(t));
+
+  if ('startDate' in b) {
+    const startDate = String(b.startDate || '').trim();
+    if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return bad('Invalid start date');
+    setSetting('daycare_start', startDate);
+  }
+  if ('classDays' in b) {
+    const days = [...new Set((Array.isArray(b.classDays) ? b.classDays : []).map(Number).filter(n => n >= 0 && n <= 6))];
+    if (!days.length) return bad('Choose at least one class day');
+    setSetting('class_days', JSON.stringify(days.sort()));
+  }
+  if ('schoolStart' in b) {
+    if (!isTime(b.schoolStart)) return bad('Invalid class start time');
+    setSetting('school_start', b.schoolStart);
+  }
+  if ('schoolEnd' in b) {
+    if (!isTime(b.schoolEnd)) return bad('Invalid class end time');
+    setSetting('school_end', b.schoolEnd);
+  }
+  if ('closingTime' in b) {
+    if (!isTime(b.closingTime)) return bad('Invalid closing time');
+    setSetting('closing_time', b.closingTime);
+  }
+  res.json({ ok: true, ...reportSettings() });
+});
 // Parents only see their own children
 app.get('/api/attendance', auth(['parent']), (req, res) => {
   const r = buildReport(validMonth(req.query.month), false);
@@ -408,8 +458,8 @@ async function notifyMonthly(month, r) {
     const p = db.prepare('SELECT name, email FROM users WHERE id = ?').get(pid);
     if (!p) continue;
     const lines = kids.map(c => {
-      const parts = [`attended ${c.present} of ${r.schoolDays} school days (${c.rate}%)`];
-      if (r.schoolDays && c.present === r.schoolDays) parts.push('perfect attendance, well done');
+      const parts = [`attended ${c.present} of ${c.schoolDays} school days (${c.rate}%)`];
+      if (c.schoolDays && c.present === c.schoolDays) parts.push('perfect attendance, well done');
       if (c.late) parts.push(`${c.late} late arrival(s)`);
       if (c.early) parts.push(`${c.early} early pickup(s)`);
       if (c.avgStay) parts.push(`stayed about ${c.avgStay} hours a day`);

@@ -72,6 +72,7 @@ addCol('children', 'medical_notes', "TEXT DEFAULT ''");
 addCol('children', 'emergency_name', "TEXT DEFAULT ''");
 addCol('children', 'emergency_phone', "TEXT DEFAULT ''");
 addCol('children', 'student_code', 'TEXT');
+addCol('children', 'gender', "TEXT DEFAULT ''");
 addCol('scans', 'email_status', "TEXT DEFAULT 'pending'");
 addCol('scans', 'sms_status', "TEXT DEFAULT 'pending'");
 
@@ -124,6 +125,10 @@ db.exec(`
     json TEXT NOT NULL,
     notified INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS settings (             -- small key/value store (e.g. daycare start date)
+    key TEXT PRIMARY KEY,
+    value TEXT
   );
   CREATE TABLE IF NOT EXISTS outbox (               -- email notifications that failed and will be retried
     id INTEGER PRIMARY KEY AUTOINCREMENT,
